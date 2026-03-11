@@ -47,6 +47,7 @@ use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::pipeline::graphics::rasterization::RasterizationState;
 use vulkano::pipeline::graphics::rasterization::PolygonMode;
 use vulkano::pipeline::graphics::color_blend::{ColorBlendState, ColorBlendAttachmentState};
+use vulkano::command_buffer::PrimaryAutoCommandBuffer;
 
 // Import our custom shape and mesh system
 mod shapes;
@@ -69,12 +70,45 @@ struct PushConstants {
 }
 
 // * RenderObject - Represents something we can draw on screen
+#[derive(Clone)]
 struct RenderObject {
+    per_frame_data: Vec<(Subbuffer<UniformBufferObject>, Arc<PersistentDescriptorSet>)>,
     mesh: Mesh,                                     // The actual geometry data
     transform: Transform,                           // Position/rotation/scale
-    uniform_buffer: Subbuffer<UniformBufferObject>, // GPU buffer with transformation matrices
-    descriptor_set: Arc<PersistentDescriptorSet>,   // Tells GPU where to find our uniform buffer
+    animation_type: AnimationType,                  // ? Type of animation (e.g., "Rotate", "Pulse"), I am so unsure about this, I want to do something like in THREE.js 
 }
+
+
+// ? I dont want to describe it, maybe I will delete it, bc I dont like it.
+enum AnimationType {
+    Rotate,
+    Pulse,
+    Static,
+    Custom(Box<dyn Fn(&mut Transform, f32) + Send + Sync>),
+}
+
+impl Clone for AnimationType {
+    fn clone(&self) -> Self {
+        match self {
+            AnimationType::Rotate => AnimationType::Rotate,
+            AnimationType::Pulse => AnimationType::Pulse,
+            AnimationType::Static => AnimationType::Static,
+            AnimationType::Custom(_) => panic!("Cannot clone custom animation"),
+        }
+    }
+}
+
+impl std::fmt::Debug for AnimationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AnimationType::Rotate => write!(f, "Rotate"),
+            AnimationType::Pulse => write!(f, "Pulse"),
+            AnimationType::Static => write!(f, "Static"),
+            AnimationType::Custom(_) => write!(f, "Custom(<closure>)"),
+        }
+    }
+}
+
 
 // ! UNIFORM BUFFER OBJECT - Matrix data sent to GPU each frame
 #[repr(C)]
@@ -96,27 +130,30 @@ fn create_render_object(
     view: [[f32; 4]; 4],
     proj: [[f32; 4]; 4]
 ) -> RenderObject {
-
+    let mut per_frame_data = Vec::new();
     // * Create GPU-side buffer for our uniform data
-    let uniform_buffer = Buffer::from_data(
-        &memory_allocator.clone(),
-        BufferCreateInfo { usage: BufferUsage::UNIFORM_BUFFER, ..Default::default() },
-        AllocationCreateInfo { usage: MemoryUsage::Upload, ..Default::default() },
-        UniformBufferObject {
+    for _ in 0..3 {
+        let uniform_buffer = Buffer::from_data(
+            memory_allocator,
+            BufferCreateInfo { usage: BufferUsage::UNIFORM_BUFFER, ..Default::default() },
+            AllocationCreateInfo { usage: MemoryUsage::Upload, ..Default::default() },
+            UniformBufferObject {
             model: transform.to_matrix(),
             view,
             proj,
         },
-    ).unwrap();
+        ).unwrap();
 
-    // * Descriptor set tells the shader "your uniform buffer is at this address"
-    let descriptor_set = PersistentDescriptorSet::new(
-        descriptor_set_allocator,
-        pipeline.layout().set_layouts().get(0).unwrap().clone(),
-        [WriteDescriptorSet::buffer(0, uniform_buffer.clone())],
-    ).unwrap();
+        let descriptor_set = PersistentDescriptorSet::new(
+            descriptor_set_allocator,
+            pipeline.layout().set_layouts().get(0).unwrap().clone(),
+            [WriteDescriptorSet::buffer(0, uniform_buffer.clone())],
+        ).unwrap();
+        
+        per_frame_data.push((uniform_buffer, descriptor_set));
+    }
 
-    RenderObject { mesh, transform, uniform_buffer, descriptor_set }
+    RenderObject { mesh, transform, per_frame_data, animation_type: AnimationType::Static }
 }
 
 // * Creates framebuffers for each swapchain image (each needs its own color + depth buffer)
@@ -238,7 +275,7 @@ fn main() {
         enabled_extensions: required_extensions,
         ..Default::default()
     }).unwrap();
-
+    // print!("{:?}", instance);
     // * Create window and surface (surface = window's drawing area)
     let event_loop = EventLoop::new();
     let surface = WindowBuilder::new().with_title("Vulkan Engine").build_vk_surface(&event_loop, instance.clone()).unwrap();
@@ -280,7 +317,8 @@ fn main() {
             image_extent: window.inner_size().into(),
             image_usage: ImageUsage::COLOR_ATTACHMENT,  // We'll draw to these images
             composite_alpha: caps.supported_composite_alpha.into_iter().next().unwrap(),
-            present_mode: PresentMode::Immediate,  // Show frames immediately (no vsync)
+            //present_mode: PresentMode::Immediate,  // Show frames immediately (no vsync), can be used for benchmarking or just for fun
+            present_mode: PresentMode::Fifo, // So, only Fifo is guaranteed to be supported on every device. And I think its better for some kind of prod, if I ever will get to this point, but for now, I want to see the maximum fps, so I will use Immediate, but if you want to use Fifo, its your choise
             ..Default::default()
         }).unwrap();
         (sw, img)
@@ -353,23 +391,30 @@ fn main() {
     // ! CREATE SCENE OBJECTS 
     let mut render_objects = Vec::new();
 
-    // let cube_mesh = create_cube(&memory_allocator, [0.0, 1.0, 0.0]);  // Green cube
+    let cube_mesh = create_cube(&memory_allocator, [0.0, 1.0, 0.0]);  // Green cube
+
+    let mut cube = create_render_object(
+        &device, &memory_allocator, &descriptor_set_allocator, &pipeline,
+        cube_mesh.clone(),
+        Transform { position: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], ..Default::default() }, 
+        view, proj
+    );
+    cube.animation_type = AnimationType::Custom(Box::new(|transform, elapsed| {
+        transform.position[0] = elapsed.cos() * 2.0;
+        transform.rotation[0] = elapsed;
+    }));
+    // cube.animation_type = AnimationType::Rotate;
+    // cube.animation_type = AnimationType::Pulse;
+    render_objects.push(cube);
+
+    // let sphere_mesh = create_sphere(&memory_allocator, [0.0, 1.0, 0.0], 8, 16);  // Green sphere
 
     // render_objects.push(create_render_object(
     //     &device, &memory_allocator, &descriptor_set_allocator, &pipeline,
-    //     cube_mesh.clone(),
+    //     sphere_mesh.clone(),
     //     Transform { position: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], ..Default::default() }, 
     //     view, proj
     // ));
-
-    let sphere_mesh = create_sphere(&memory_allocator, [0.0, 1.0, 0.0], 8, 16);  // Green sphere
-
-    render_objects.push(create_render_object(
-        &device, &memory_allocator, &descriptor_set_allocator, &pipeline,
-        sphere_mesh.clone(),
-        Transform { position: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], ..Default::default() }, 
-        view, proj
-    ));
 
     // render_objects.push(create_render_object(
     //     &device, &memory_allocator, &descriptor_set_allocator, &pipeline,
@@ -394,7 +439,12 @@ fn main() {
     let start_time = std::time::Instant::now(); 
     let mut frame_count: u32 = 0;
     let mut fps_timer = std::time::Instant::now();
-    let mut time = 0.0f32;
+    let mut time: f32 = 0.0;
+    let mut frame_index = 0; 
+    let mut total_fps = 0;
+
+    let mut dims: [u32; 2] = window.inner_size().into();
+    // if dims[0] == 0 || dims[1] == 0 { return; }  // Window minimized => skip rendering
     // ! MAIN RENDER LOOP - runs until the window is closed
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;  // Continuously check for events
@@ -410,24 +460,29 @@ fn main() {
             
             // ! RENDER FRAME - This is where the actual drawing happens
             Event::MainEventsCleared => {
-                unsafe {
-                    device.wait_idle().unwrap();
-                }
-                time += 0.002;
+                // unsafe {
+                //     device.wait_idle().unwrap(); // So, this shit can fix a lot of problems, BUT ITS ONLY FOR TESTING, PERFORMANCE IS GOING DOWN
+                // }
+                frame_index = (frame_index + 1) % 3;
+                // time += 0.002; // this is frame bassed, so I dont like to use it, but if you want, its your choise 
                 let elapsed = start_time.elapsed().as_secs_f32();
-                let dims: [u32; 2] = window.inner_size().into();
-                if dims[0] == 0 || dims[1] == 0 { return; }  // Window minimized, skip rendering
+
 
 
                 // * FPS calculation and display
                 frame_count += 1;
                 let elapsed_fps = fps_timer.elapsed().as_secs_f32();
 
-                if elapsed_fps >= 1.0 {
+                if elapsed_fps >= 2.0 {
                     let fps = frame_count as f32 / elapsed_fps;
                     println!("FPS: {:.0}", fps);
+                    // println!("FPS: {:.0}", elapsed);
+                    total_fps += frame_count;
                     frame_count = 0;
                     fps_timer = std::time::Instant::now();
+                    if elapsed >= 10.0 {
+                        println!("middle Fps: {:.0}", (total_fps as f32 / elapsed));
+                    }
                 }
 
                 // ! RECREATE SWAPCHAIN if window was resized
@@ -435,7 +490,7 @@ fn main() {
                     unsafe {
                         device.wait_idle().unwrap();  // Wait for GPU to finish
                     }
-
+                    dims = window.inner_size().into();
                     let (new_sw, new_img) = swapchain.recreate(SwapchainCreateInfo { 
                         image_extent: dims, 
                         ..swapchain.create_info() 
@@ -450,6 +505,7 @@ fn main() {
                         .collect();
 
                     framebuffers = create_framebuffers(new_views.as_slice(), &render_pass, &memory_allocator, dims);
+
                     recreate_swapchain = false;
                 }
 
@@ -473,15 +529,6 @@ fn main() {
                     queue.queue_family_index(), 
                     CommandBufferUsage::OneTimeSubmit
                 ).unwrap();
-                
-                for obj in &mut render_objects {
-                    obj.transform.rotation[1] = time;
-                    obj.transform.rotation[2] = time;
-                    obj.transform.rotation[0] = time;
-                    let mut data = obj.uniform_buffer.write().unwrap();
-                    data.model = obj.transform.to_matrix();
-                }
-
 
                 // * Start render pass (clearing color to dark blue and depth to 1.0)
                 builder.begin_render_pass(
@@ -495,29 +542,13 @@ fn main() {
                     SubpassContents::Inline,
                 ).unwrap()
                 .set_viewport(0, vec![Viewport {
-                    origin: [0.0, 0.0],
+                    origin: [0.0, 0.0], // ! can animate camera with that shit
                     dimensions: [dims[0] as f32, dims[1] as f32],
                     depth_range: 0.0..1.0,
                 }])
                 .bind_pipeline_graphics(pipeline.clone());
-
+                animate_objects(&mut render_objects, elapsed, &mut builder, img_index as usize, &pipeline);
                 // * Draw all objects
-                for obj in &render_objects {
-                    builder.bind_descriptor_sets(
-                        PipelineBindPoint::Graphics,
-                        pipeline.layout().clone(),
-                        0,
-                        obj.descriptor_set.clone(),
-                    )
-                    .bind_vertex_buffers(0, (obj.mesh.vertices.clone(),)); 
-                    
-                    if let Some(indices) = &obj.mesh.indices {
-                        builder.bind_index_buffer(indices.clone());
-                        builder.draw_indexed(obj.mesh.index_count, 1, 0, 0, 0).unwrap();
-                    } else {
-                        builder.draw(obj.mesh.vertex_count, 1, 0, 0).unwrap();
-                    }
-                }
 
                 builder.end_render_pass().unwrap();
                 let command_buffer = builder.build().unwrap();
@@ -540,4 +571,47 @@ fn main() {
             _ => ()
         }
     });
+}
+
+fn animate_objects(
+    render_objects: &mut Vec<RenderObject>, 
+    elapsed: f32, 
+    builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, 
+    frame_index: usize, 
+    pipeline: &Arc<GraphicsPipeline>
+) {
+    for obj in render_objects.iter_mut() {
+        // Phase 1: Update (CPU) 
+        match &obj.animation_type {
+            AnimationType::Rotate => obj.transform.rotation[1] = elapsed,
+            AnimationType::Pulse => {
+                let s = (elapsed.sin() + 1.0) / 2.0;
+                obj.transform.scale = [s, s, s];
+            },
+            AnimationType::Static => {},
+            AnimationType::Custom(func) => func(&mut obj.transform, elapsed),
+        }
+
+        // phase 2: Render (GPU)
+        builder.bind_vertex_buffers(0, (obj.mesh.vertices.clone(),)); 
+    
+        let (buffer, descriptor_set) = &obj.per_frame_data[frame_index];
+        
+        let mut data = buffer.write().unwrap();
+        data.model = obj.transform.to_matrix();
+        
+        builder.bind_descriptor_sets(
+            PipelineBindPoint::Graphics,
+            pipeline.layout().clone(),
+            0,
+            descriptor_set.clone(), 
+        );
+        
+        if let Some(indices) = &obj.mesh.indices {
+            builder.bind_index_buffer(indices.clone());
+            builder.draw_indexed(obj.mesh.index_count, 1, 0, 0, 0).unwrap();
+        } else {
+            builder.draw(obj.mesh.vertex_count, 1, 0, 0).unwrap();
+        }
+    }
 }
