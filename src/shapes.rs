@@ -6,6 +6,7 @@ use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator};
 use vulkano::pipeline::graphics::vertex_input::Vertex;
 use vulkano::command_buffer::AutoCommandBufferBuilder;
+use crate::RenderObject;
 
 // * Trait combining all requirements for vertex types
 pub trait VertexType: Vertex + bytemuck::Pod + bytemuck::Zeroable + Send + Sync {}
@@ -251,7 +252,7 @@ impl SceneObject {
 
 // ! SCENE - Collection of objects to render
 pub struct Scene {
-    pub objects: Vec<SceneObject>,
+    pub objects: Vec<RenderObject>,
 }
 
 impl Scene {
@@ -259,7 +260,7 @@ impl Scene {
         Self { objects: Vec::new() }
     }
 
-    pub fn add_object(&mut self, object: SceneObject) {
+    pub fn add_object(&mut self, object: RenderObject) {
         self.objects.push(object);
     }
 

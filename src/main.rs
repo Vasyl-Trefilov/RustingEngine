@@ -49,7 +49,9 @@ use vulkano::pipeline::graphics::color_blend::{ColorBlendState, ColorBlendAttach
 use vulkano::command_buffer::PrimaryAutoCommandBuffer;
 use std::panic;
 
-// Import our custom shape and mesh system
+mod scene_manager;
+use scene_manager::RenderScene;
+
 mod shapes;
 use shapes::{VertexPosColor, Mesh, Scene, SceneObject, Transform};
 use shapes::shapes::{
@@ -165,7 +167,8 @@ fn create_render_object(
     mesh: Mesh,
     transform: Transform,
     view: [[f32; 4]; 4],
-    proj: [[f32; 4]; 4]
+    proj: [[f32; 4]; 4],
+    animation_type: AnimationType
 ) -> RenderObject {
     let mut per_frame_data = Vec::new();
     // * Create GPU-side buffer for our uniform data
@@ -190,7 +193,7 @@ fn create_render_object(
         per_frame_data.push((uniform_buffer, descriptor_set));
     }
 
-    RenderObject { mesh, transform, per_frame_data, animation_type: AnimationType::Static, mouse_state: MouseState { ..Default::default() }, }
+    RenderObject { mesh, transform, per_frame_data, animation_type, mouse_state: MouseState { ..Default::default() }, }
 }
 
 // * Creates framebuffers for each swapchain image (each needs its own color + depth buffer)
@@ -267,8 +270,8 @@ mod fs {
                 if (min_dist < 0.01) {
                     f_color = vec4(1.0, 1.0, 1.0, 1.0);
                 } else {
-                    // discard;
-                    f_color = vec4(v_color,0.0);
+                    discard;
+                    // f_color = vec4(v_color,0.0);
                 }
             }
             
@@ -285,6 +288,7 @@ fn main() {
             eprintln!("Panic payload: {}", s);
         }
     }));
+    // * I think, I need this comments more then anyone who will read it(no one cares about my code and will never read it)
     let dims = [1920, 1080]; // Placeholder dimensions for projection matrix
     let aspect = dims[0] as f32 / dims[1] as f32;
     let fov = 45.0f32.to_radians();  // Field of view in radians
@@ -433,7 +437,7 @@ fn main() {
     let mut mouse_state = MouseState::default();
     let mut prev_mouse_state = MouseState::default();
     // ! CREATE SCENE OBJECTS 
-    let mut render_objects = Vec::new();
+    let mut render_objects: Vec<RenderObject> = Vec::new();
 
     // ! Wow, thats look so nice, I am far from THREE.js, but already good
 
@@ -481,21 +485,24 @@ fn main() {
 
     let meshes = [cube_mesh, sphere_mesh, sphere_sub_mesh, plane_mesh, tetra_mesh, octa_mesh, ico_mesh, dodeca_mesh, grid_mesh,torus_mesh, cylinder_mesh, cone_mesh, pyramid_mesh];
 
-    // You can see how to switch objects in click function 
     let mut mesh = create_render_object(
         &device, &memory_allocator, &descriptor_set_allocator, &pipeline,
         meshes[0].clone(),
         Transform { position: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], ..Default::default() }, 
-        view, proj
+        view, proj,
+        AnimationType::Rotate
     );
+    let mut render_scene = RenderScene::new(view, proj);
+    render_scene.add_object(mesh); 
+
     // cube.animation_type = AnimationType::Custom(Box::new(|transform, elapsed| {
     //     transform.position[0] = elapsed.cos() * 2.0;
     //     transform.rotation[0] = elapsed;
     // }));
-    mesh.animation_type = AnimationType::Rotate;
     // cube.animation_type = AnimationType::Pulse; // * you can uncomment this shit if you want 'cool' animations
-    render_objects.push(mesh);
-    
+    // render_objects.push(mesh);
+
+
     // * FPS counter setup
     let start_time = std::time::Instant::now(); 
     let mut frame_count: u32 = 0;
@@ -550,20 +557,20 @@ fn main() {
                             mouse_state.left_clicked = true;
                             
                             mesh_index = (mesh_index + 1) % 13;
-                            // Some cool Meshes switch on click
+                            // Some cool Meshes switch on click, only if render render_objects, I think I will delete it soon, bc I make scenes now
                             let new_mesh = match mesh_index {
                                 0 => create_cube(&memory_allocator, [0.0, 1.0, 0.0]),
                                 1 => create_sphere(&memory_allocator, [1.0, 0.0, 0.0], 32, 16),
-                                2 => create_sphere_subdivided(&memory_allocator, [1.0, 0.0, 0.0], 3), // Lower subdivision!
+                                2 => create_sphere_subdivided(&memory_allocator, [1.0, 0.0, 0.0], 3), 
                                 3 => create_plane(&memory_allocator, [1.0, 0.0, 0.0], 2.0, 2.0),
                                 4 => create_tetrahedron(&memory_allocator, [1.0, 0.0, 0.0]),
                                 5 => create_octahedron(&memory_allocator, [0.0, 0.0, 1.0]),
                                 6 => create_icosahedron(&memory_allocator, [1.0, 1.0, 0.0]),
                                 7 => create_dodecahedron(&memory_allocator, [1.0, 1.0, 0.0]),
                                 8 => create_grid(&memory_allocator, [1.0, 1.0, 0.0], 4.0, 8),
-                                9 => create_torus(&memory_allocator, [1.0, 0.0, 1.0], 1.0, 0.3, 20, 10), // Lower segments!
-                                10 => create_cylinder(&memory_allocator, [0.0, 1.0, 1.0], 0.5, 1.0, 16), // Lower sectors!
-                                11 => create_cone(&memory_allocator, [1.0, 0.5, 0.0], 0.5, 1.0, 16), // Lower sectors!
+                                9 => create_torus(&memory_allocator, [1.0, 0.0, 1.0], 1.0, 0.3, 20, 10), 
+                                10 => create_cylinder(&memory_allocator, [0.0, 1.0, 1.0], 0.5, 1.0, 16), 
+                                11 => create_cone(&memory_allocator, [1.0, 0.5, 0.0], 0.5, 1.0, 16), 
                                 12 => create_pyramid(&memory_allocator, [0.5, 0.0, 0.5], 1.0, 1.0),
                                 _ => create_cube(&memory_allocator, [0.0, 1.0, 0.0]),
                             };
@@ -682,8 +689,10 @@ fn main() {
                     depth_range: 0.0..1.0,
                 }])
                 .bind_pipeline_graphics(pipeline.clone());
-                animate_objects(&mut render_objects, elapsed, &mouse_state, &mut builder, img_index as usize, &pipeline);
-                // * Draw all objects
+
+                // Scene render, entry point for my future library
+                render_scene.update(elapsed, &mouse_state);
+                render_scene.render(&mut builder, frame_index, &pipeline);
 
                 builder.end_render_pass().unwrap();
                 let command_buffer = builder.build().unwrap();
@@ -708,6 +717,7 @@ fn main() {
     });
 }
 
+// In future will be deleted, bc I render in Scene :<
 fn animate_objects(
     render_objects: &mut Vec<RenderObject>, 
     elapsed: f32, 
@@ -718,10 +728,12 @@ fn animate_objects(
 ) {
     for obj in render_objects.iter_mut() {
         obj.mouse_state = *mouse_state;
+
         // Update (CPU) 
         match &obj.animation_type {
             AnimationType::Rotate => {
                 // obj.transform.rotation[1] = elapsed,
+                println!("{:?}", obj.animation_type);
                 obj.transform.rotation[1] = -mouse_state.position.0 * std::f32::consts::PI;
                 obj.transform.rotation[0] = -mouse_state.position.1 * std::f32::consts::PI;
             }
