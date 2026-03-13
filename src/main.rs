@@ -8,7 +8,7 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, Rend
 use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags};
 use vulkano::image::view::ImageView;
-use vulkano::instance::{Instance, InstanceCreateInfo};
+use vulkano::instance::{Instance as OtherInstance, InstanceCreateInfo};
 use vulkano::pipeline::graphics::input_assembly::{InputAssemblyState, PrimitiveTopology};
 use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
 use vulkano::pipeline::{GraphicsPipeline};
@@ -30,6 +30,7 @@ use vulkano::pipeline::PipelineBindPoint;
 use vulkano::pipeline::graphics::vertex_input::Vertex;
 use vulkano::buffer::Subbuffer;
 use std::f32::consts::PI;
+use std::io::pipe;
 use std::sync::Arc;
 use vulkano::memory::allocator::StandardMemoryAllocator;
 use vulkano::image::sys::Image;
@@ -47,10 +48,20 @@ use vulkano::pipeline::graphics::rasterization::RasterizationState;
 use vulkano::pipeline::graphics::rasterization::PolygonMode;
 use vulkano::pipeline::graphics::color_blend::{ColorBlendState, ColorBlendAttachmentState};
 use vulkano::command_buffer::PrimaryAutoCommandBuffer;
+use vulkano::pipeline::graphics::vertex_input::VertexInputState;
 use std::panic;
-
+use rand::prelude::*;
 mod scene_manager;
 use scene_manager::RenderScene;
+use vulkano::pipeline::graphics::vertex_input::VertexInputAttributeDescription;
+use vulkano::pipeline::graphics::vertex_input::{
+    VertexInputBindingDescription, 
+    VertexInputRate
+};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::time::Instant;
+
 
 mod shapes;
 use shapes::{VertexPosColor, Mesh, Scene, SceneObject, Transform};
@@ -62,18 +73,11 @@ use shapes::shapes::{
     create_torus, // ! thats looks so sick, I am proud of myself, just a bit
 };
 
-// ! STAR STRUCTURE - For future particle system (currently unused)
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct Star {
-    position: [f32; 3]  // 3D position of star
-}
-
 // ! MOUSE 
 #[derive(Clone, Copy, Debug)]
 struct MouseState {
-    position: (f32, f32),      // Normalized coordinates (-1 to 1)
-    pixel_position: (f32, f32), // Pixel coordinates
+    position: (f32, f32),      // Normalized coordinates (-1 to 1), so its like a vulkan type
+    pixel_position: (f32, f32), // Pixel coordinates, like from 0 to 1900
     left_clicked: bool,
     right_clicked: bool,
     left_pressed: bool,
@@ -108,6 +112,7 @@ struct PushConstants {
 }
 
 // * RenderObject - Represents something we can draw on screen
+// * very soon I will delete it and use Instance for performance 
 #[derive(Clone)]
 struct RenderObject {
     per_frame_data: Vec<(Subbuffer<UniformBufferObject>, Arc<PersistentDescriptorSet>)>,
@@ -115,8 +120,41 @@ struct RenderObject {
     transform: Transform,                           // Position/rotation/scale
     animation_type: AnimationType,                  // ? Type of animation (e.g., "Rotate", "Pulse"), I am so unsure about this, I want to do something like in THREE.js 
     mouse_state: MouseState,
+    original_position: [f32; 3], 
 }
 
+#[derive(Clone)]
+pub struct Instance {
+    pub transform: Transform,
+    pub original_position: [f32; 3],
+    pub animation: AnimationType,
+    pub velocity: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct InstanceData {
+    pub model: [[f32; 4]; 4],  // 4x4 matrix = 16 floats, important for next steps
+}
+
+pub struct RenderBatch {
+    pub mesh: Mesh,
+    pub instances: Vec<Instance>,
+}
+
+// * So, this might be like an new version of AnimationType
+trait Behavior {
+    fn update(&mut self, transform: &mut Transform, time: f32, mouse: &MouseState);
+}
+
+struct RotateBehavior;
+
+impl Behavior for RotateBehavior {
+    fn update(&mut self, transform: &mut Transform, time: f32, mouse: &MouseState) {
+        transform.rotation[1] = -mouse.position.0 * std::f32::consts::PI;
+        transform.rotation[0] = -mouse.position.1 * std::f32::consts::PI;
+    }
+}
 
 // ? I dont want to describe it, maybe I will delete it, bc I dont like it.
 enum AnimationType {
@@ -153,9 +191,33 @@ impl std::fmt::Debug for AnimationType {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct UniformBufferObject {
-    pub model: [[f32; 4]; 4],
     pub view: [[f32; 4]; 4],
     pub proj: [[f32; 4]; 4],
+}
+
+impl Default for UniformBufferObject {
+    fn default() -> Self {
+        let aspect = 16.0 / 9.0;
+        let fov = 45.0f32.to_radians();
+        let f = 1.0 / (fov / 2.0).tan();
+        let z_near = 0.1;
+        let z_far = 100.0;
+        
+        Self {
+            view: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 5.0, 1.0],
+            ],
+            proj: [
+                [f / aspect, 0.0, 0.0, 0.0],
+                [0.0, f, 0.0, 0.0],
+                [0.0, 0.0, (z_far + z_near) / (z_far - z_near), 1.0],
+                [0.0, 0.0, -(2.0 * z_far * z_near) / (z_far - z_near), 0.0],
+            ],
+        }
+    }
 }
 
 // * Creates a render object with its own uniform buffer and descriptor set
@@ -171,17 +233,12 @@ fn create_render_object(
     animation_type: AnimationType
 ) -> RenderObject {
     let mut per_frame_data = Vec::new();
-    // * Create GPU-side buffer for our uniform data
     for _ in 0..3 {
         let uniform_buffer = Buffer::from_data(
             memory_allocator,
             BufferCreateInfo { usage: BufferUsage::UNIFORM_BUFFER, ..Default::default() },
             AllocationCreateInfo { usage: MemoryUsage::Upload, ..Default::default() },
-            UniformBufferObject {
-            model: transform.to_matrix(),
-            view,
-            proj,
-        },
+            UniformBufferObject { view, proj },  // No model here
         ).unwrap();
 
         let descriptor_set = PersistentDescriptorSet::new(
@@ -193,9 +250,15 @@ fn create_render_object(
         per_frame_data.push((uniform_buffer, descriptor_set));
     }
 
-    RenderObject { mesh, transform, per_frame_data, animation_type, mouse_state: MouseState { ..Default::default() }, }
+    RenderObject { 
+        mesh, 
+        transform, 
+        per_frame_data, 
+        animation_type, 
+        mouse_state: MouseState::default(), 
+        original_position: transform.position 
+    }
 }
-
 // * Creates framebuffers for each swapchain image (each needs its own color + depth buffer)
 fn create_framebuffers(
     images: &[Arc<dyn ImageViewAbstract>],
@@ -231,24 +294,34 @@ mod vs {
     vulkano_shaders::shader! {
         ty: "vertex",
         src: "
- #version 450
+        #version 450
 
-            layout(location = 0) in vec3 position;
-            layout(location = 1) in vec3 color;
-            layout(location = 2) in vec3 barycentric; 
+        layout(location = 0) in vec3 position;
+        layout(location = 1) in vec3 color;
+        layout(location = 2) in vec3 barycentric;
 
-            layout(location = 0) out vec3 v_color;
-            layout(location = 1) out vec3 v_barycentric; 
+        // Instance attributes - model matrix as 4 vec4s, as I said, remebmer the 16 in Instance struct
+        layout(location = 3) in vec4 model_row0;
+        layout(location = 4) in vec4 model_row1;
+        layout(location = 5) in vec4 model_row2;
+        layout(location = 6) in vec4 model_row3;
 
-            layout(set = 0, binding = 0) uniform UniformBufferObject {
-                mat4 model; mat4 view; mat4 proj;
-            } ubo;
+        layout(location = 0) out vec3 v_color;
+        layout(location = 1) out vec3 v_barycentric;
 
-            void main() {
-                gl_Position = ubo.proj * ubo.view * ubo.model * vec4(position, 1.0);
-                v_color = color;
-                v_barycentric = barycentric; 
-            }
+        layout(set = 0, binding = 0) uniform UniformBufferObject {
+            mat4 view;
+            mat4 proj;
+        } ubo;
+
+        void main() {
+            mat4 instance_model = mat4(model_row0, model_row1, model_row2, model_row3);
+            
+            gl_Position = ubo.proj * ubo.view * instance_model * vec4(position, 1.0);
+            
+            v_color = color;
+            v_barycentric = barycentric;
+        }
         "
     }
 }
@@ -270,8 +343,8 @@ mod fs {
                 if (min_dist < 0.01) {
                     f_color = vec4(1.0, 1.0, 1.0, 1.0);
                 } else {
-                    discard;
-                    // f_color = vec4(v_color,0.0);
+                    discard; // discard for wireframe, and color for collor, if you dont want to see any wireframe at all, you can comment upper lines, bc they build the wireframe
+                    // f_color = vec4(v_color,1.0);
                 }
             }
             
@@ -291,36 +364,38 @@ fn main() {
     // * I think, I need this comments more then anyone who will read it(no one cares about my code and will never read it)
     let dims = [1920, 1080]; // Placeholder dimensions for projection matrix
     let aspect = dims[0] as f32 / dims[1] as f32;
-    let fov = 45.0f32.to_radians();  // Field of view in radians
-    let z_near = 0.1;                 // Near clipping plane
-    let z_far = 100.0;                 // Far clipping plane
-    let f = 1.0 / (fov / 2.0).tan();   // Focal length calculation
+    let fov = 45.0f32.to_radians();  // Field of view in radians, its like a minecraft fov, if you know
+    let z_near = 0.1;                 // Near clipping plane, it means, if some object is 0.1 from camera, it will not be shown
+    let z_far = 100.0;                 // Far clipping plane, how far can 'camera' see
+    let f = 1.0 / (fov / 2.0).tan();   // Focal length calculation, yes, just google it if you need
 
     // ! PROJECTION MATRIX - Converts 3D to 2D screen coordinates
     let proj: [[f32; 4]; 4] = [
         [f / aspect, 0.0, 0.0, 0.0],
-        [0.0, f, 0.0, 0.0],
-        [0.0, 0.0, (z_far + z_near) / (z_far - z_near), 1.0],
-        [0.0, 0.0, -(2.0 * z_far * z_near) / (z_far - z_near), 0.0],
+        [0.0, -f, 0.0, 0.0], 
+        [0.0, 0.0, z_far / (z_far - z_near), 1.0],
+        [0.0, 0.0, -(z_far * z_near) / (z_far - z_near), 0.0],
     ];
-
     // ! VIEW MATRIX - Camera position (currently looking from [0,0,5])
     let view = [
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 5.0, 1.0],
+        [0.0, 0.0, 10.0, 1.0], 
     ];
+    // ! So here is formule of reaching a border of the window 'clip = proj * view * model * vec4(position,1)', I would describe with example, but its too big, google if you want
+
     // ! VULKAN INITIALIZATION - Setting up the connection to the GPU
     let library = VulkanLibrary::new().expect("No Vulkan driver found.");
     let required_extensions = vulkano_win::required_extensions(&library);
 
     // * Create Vulkan instance (represents the Vulkan library state)
-    let instance = Instance::new(library, InstanceCreateInfo {
+    let instance = OtherInstance::new(library, InstanceCreateInfo {
         enabled_extensions: required_extensions,
         ..Default::default()
     }).unwrap();
-    // print!("{:?}", instance);
+    // print!("{:?}", instance); // Some useful data, different OS, drivers and etc. => different output
+
     // * Create window and surface (surface = window's drawing area)
     let event_loop = EventLoop::new();
     let surface = WindowBuilder::new().with_title("Vulkan Engine").build_vk_surface(&event_loop, instance.clone()).unwrap();
@@ -338,8 +413,8 @@ fn main() {
             }).map(|i| (p, i as u32))
         })
         .min_by_key(|(p, _)| match p.properties().device_type {
-            PhysicalDeviceType::DiscreteGpu => 0,  // Prefer discrete GPU
-            PhysicalDeviceType::IntegratedGpu => 1, // Then integrated
+            PhysicalDeviceType::DiscreteGpu => 0,  // Prefer discrete GPU like RTX...
+            PhysicalDeviceType::IntegratedGpu => 1, // Then integrated like a proccessor if it can display Graphic
             _ => 2,                                   // Anything else last
         }).unwrap();
 
@@ -362,8 +437,8 @@ fn main() {
             image_extent: window.inner_size().into(),
             image_usage: ImageUsage::COLOR_ATTACHMENT,  // We'll draw to these images
             composite_alpha: caps.supported_composite_alpha.into_iter().next().unwrap(),
-            present_mode: PresentMode::Immediate,  // Show frames immediately (no vsync), can be used for benchmarking or just for fun
-            // present_mode: PresentMode::Fifo, // So, only Fifo is guaranteed to be supported on every device. And I think its better for some kind of prod, if I ever will get to this point, but for now, I want to see the maximum fps, so I will use Immediate, but if you want to use Fifo, its your choise
+            // present_mode: PresentMode::Immediate,  // Show frames immediately (no vsync), can be used for benchmarking or just for fun
+            present_mode: PresentMode::Fifo, // So, only Fifo is guaranteed to be supported on every device. And I think its better for some kind of prod, if I ever will get to this point, but for now, I want to see the maximum fps, so I will use Immediate, but if you want to use Fifo, its your choise
             ..Default::default()
         }).unwrap();
         (sw, img)
@@ -412,15 +487,61 @@ fn main() {
     let vs = vs::load(device.clone()).unwrap();
     let fs = fs::load(device.clone()).unwrap();
 
+    // * So this is the hell part, this is some kind of GPU instructions, I use them to tell GPU, where and how does data looks like, like here is 36 bytes per vertex and 64 per Instance, why? Look at Instance struct.
+    let vertex_input_state = VertexInputState::new()
+    .binding(0, VertexInputBindingDescription {
+        stride: std::mem::size_of::<VertexPosColor>() as u32,
+        input_rate: VertexInputRate::Vertex,
+    })
+    .binding(1, VertexInputBindingDescription {
+        stride: std::mem::size_of::<InstanceData>() as u32,
+        input_rate: VertexInputRate::Instance { divisor: 1 },
+    })
+    .attribute(0, VertexInputAttributeDescription {
+        binding: 0,
+        format: Format::R32G32B32_SFLOAT,
+        offset: 0,
+    })
+    .attribute(1, VertexInputAttributeDescription {
+        binding: 0,
+        format: Format::R32G32B32_SFLOAT,
+        offset: 12,
+    })
+    .attribute(2,VertexInputAttributeDescription {
+        binding: 0,
+        format: Format::R32G32B32_SFLOAT,
+        offset: 24,
+    })
+    .attribute(3,VertexInputAttributeDescription {
+        binding: 1,
+        format: Format::R32G32B32A32_SFLOAT,
+        offset: 0,
+    })
+    .attribute(4,VertexInputAttributeDescription {
+        binding: 1,
+        format: Format::R32G32B32A32_SFLOAT,
+        offset: 16,
+    })
+    .attribute(5,VertexInputAttributeDescription {
+        binding: 1,
+        format: Format::R32G32B32A32_SFLOAT,
+        offset: 32,
+    })
+    .attribute(6, VertexInputAttributeDescription {
+        binding: 1,
+        format: Format::R32G32B32A32_SFLOAT,
+        offset: 48, 
+    });
+
     // ! GRAPHICS PIPELINE - The complete configuration for drawing
     let pipeline = GraphicsPipeline::start()
-        // .color_blend_state(ColorBlendState::new(1).blend_alpha()) // Enable alpha blending
-        .vertex_input_state(VertexPosColor::per_vertex())  // How vertices are laid out
+        .vertex_input_state(vertex_input_state) // This is GPU settings
         .vertex_shader(vs.entry_point("main").unwrap(), ())
-        .input_assembly_state(InputAssemblyState::new().topology(PrimitiveTopology::TriangleList)) // Draw triangles
-        .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())  // We'll set viewport dynamically
+        .input_assembly_state(InputAssemblyState::new().topology(PrimitiveTopology::TriangleList))
+        .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+        .rasterization_state(RasterizationState::new().cull_mode(vulkano::pipeline::graphics::rasterization::CullMode::None)) 
         .fragment_shader(fs.entry_point("main").unwrap(), ())
-        .depth_stencil_state(DepthStencilState::simple_depth_test())  // Enable depth testing
+        .depth_stencil_state(DepthStencilState::simple_depth_test())
         .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
         .build(device.clone())
         .unwrap();
@@ -428,7 +549,7 @@ fn main() {
     // * Allocator for Command Buffers (the lists of tasks we send to the GPU)
     let cb_allocator = StandardCommandBufferAllocator::new(device.clone(), StandardCommandBufferAllocatorCreateInfo::default());
     let mut recreate_swapchain = false;  // Flag for when window resizes
-    let mut previous_frame_end = Some(sync::now(device.clone()).boxed());  // Track when GPU finishes
+    let mut previous_frame_end = Some(sync::now(device.clone()).boxed());  // Track when GPU finishes to avoid vulkan crush
     
     // * Create descriptor set allocator for managing shader resource bindings
     let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
@@ -436,6 +557,7 @@ fn main() {
     // * I moved mouse here, so I can animate object, I hope it will work. And it worked, nice :>
     let mut mouse_state = MouseState::default();
     let mut prev_mouse_state = MouseState::default();
+
     // ! CREATE SCENE OBJECTS 
     let mut render_objects: Vec<RenderObject> = Vec::new();
 
@@ -448,10 +570,10 @@ fn main() {
     let cube_mesh = create_cube(&memory_allocator, [0.0, 1.0, 0.0]);  
 
     // * Create a sphere
-    let sphere_mesh = create_sphere(&memory_allocator, [1.0, 0.0, 0.0], 32, 16);  
+    // let sphere_mesh = create_sphere(&memory_allocator, [1.0, 0.0, 0.0], 8, 4);  
 
     // * Create a subdivided sphere
-    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0, 0.0, 0.0], 8);  
+    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0, 0.0, 0.0], 2);  
 
     // * Crete a plane, so flat as my female classmates..
     let plane_mesh = create_plane(&memory_allocator, [1.0, 0.0, 0.0], 2.0, 2.0);  
@@ -483,24 +605,52 @@ fn main() {
     // * Create a pyramid
     let pyramid_mesh = create_pyramid(&memory_allocator, [0.5, 0.0, 0.5], 1.0, 1.0);
 
-    let meshes = [cube_mesh, sphere_mesh, sphere_sub_mesh, plane_mesh, tetra_mesh, octa_mesh, ico_mesh, dodeca_mesh, grid_mesh,torus_mesh, cylinder_mesh, cone_mesh, pyramid_mesh];
+    // let meshes = [cube_mesh, sphere_mesh, sphere_sub_mesh, plane_mesh, tetra_mesh, octa_mesh, ico_mesh, dodeca_mesh, grid_mesh,torus_mesh, cylinder_mesh, cone_mesh, pyramid_mesh];
 
-    let mut mesh = create_render_object(
-        &device, &memory_allocator, &descriptor_set_allocator, &pipeline,
-        meshes[0].clone(),
-        Transform { position: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], ..Default::default() }, 
-        view, proj,
-        AnimationType::Rotate
-    );
-    let mut render_scene = RenderScene::new(view, proj);
-    render_scene.add_object(mesh); 
 
+    // ! A SCENE, now I will start render with scene, its already very solid, I want to make it more easy for people
+    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 1000);
+
+    let mut rng = rand::rng();
+    // * I create a cool animation with random objects, here you can find cool Transform, velocity and etc. usage
+    let meshes = [cube_mesh, sphere_sub_mesh, tetra_mesh, octa_mesh, ico_mesh, torus_mesh, cylinder_mesh, cone_mesh, pyramid_mesh];
+    for _ in 0..30 {
+        let x = rng.random_range(-7.0..7.0);
+        let y = rng.random_range(-7.0..7.0);
+        let mesh_index = rng.random_range(0..meshes.len());
+        let mut scale = 0.0;
+        if mesh_index == 4 {
+            scale = rng.random_range(0.3..0.5);
+        } else {
+            scale = rng.random_range(0.5..0.8);
+        }
+
+        let angle = rng.random_range(0.0..std::f32::consts::TAU);
+        let speed = 0.005; 
+        let vx = angle.cos() * speed;
+        let vy = angle.sin() * speed;
+
+        scene.add_instance(
+            // tetra_mesh.clone(),
+            meshes[mesh_index].clone(),
+            Instance {
+                transform: Transform {
+                    position: [x, y, 0.0],
+                    scale: [scale,scale,scale],
+                    ..Default::default()
+                },
+                original_position: [x, y, 0.0],
+                animation: AnimationType::Rotate, // I added Animation to rotate object, bc its easy and built in by me, but for more complex animation, I will create a seperate one.
+                velocity: [vx, vy, 0.0],
+            }
+        );
+    }
     // cube.animation_type = AnimationType::Custom(Box::new(|transform, elapsed| {
     //     transform.position[0] = elapsed.cos() * 2.0;
     //     transform.rotation[0] = elapsed;
     // }));
     // cube.animation_type = AnimationType::Pulse; // * you can uncomment this shit if you want 'cool' animations
-    // render_objects.push(mesh);
+    // render_objects.push(mesh); // * I dont use it anymore
 
 
     // * FPS counter setup
@@ -628,7 +778,7 @@ fn main() {
                 // ! RECREATE SWAPCHAIN if window was resized
                 if recreate_swapchain {
                     unsafe {
-                        device.wait_idle().unwrap();  // Wait for GPU to finish
+                        device.wait_idle().unwrap();  // Wait for GPU to finish or it will crash
                     }
                     dims = window.inner_size().into();
                     let (new_sw, new_img) = swapchain.recreate(SwapchainCreateInfo { 
@@ -676,7 +826,7 @@ fn main() {
                 builder.begin_render_pass(
                     RenderPassBeginInfo {
                         clear_values: vec![
-                            Some([0.0, 0.0, 0.0, 1.0].into()),  // Clear color. You can set to something other, its just a background 
+                            Some([0.0, 0.0, 0.0, 1.0].into()),  // Clear color. You can set to something other, its just a 'background color' 
                             Some(1.0.into()),                    // Clear depth
                         ],
                         ..RenderPassBeginInfo::framebuffer(framebuffers[img_index as usize].clone())
@@ -691,8 +841,9 @@ fn main() {
                 .bind_pipeline_graphics(pipeline.clone());
 
                 // Scene render, entry point for my future library
-                render_scene.update(elapsed, &mouse_state);
-                render_scene.render(&mut builder, frame_index, &pipeline);
+                // When I will release 1.0 version of library, I will try to avoid API changes
+                scene.update(elapsed, &mouse_state);
+                scene.render(&mut builder, &pipeline, &memory_allocator, frame_index, view, proj);
 
                 builder.end_render_pass().unwrap();
                 let command_buffer = builder.build().unwrap();
@@ -717,54 +868,78 @@ fn main() {
     });
 }
 
-// In future will be deleted, bc I render in Scene :<
-fn animate_objects(
-    render_objects: &mut Vec<RenderObject>, 
-    elapsed: f32, 
-    mouse_state: &MouseState,
-    builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, 
-    frame_index: usize, 
-    pipeline: &Arc<GraphicsPipeline>
-) {
-    for obj in render_objects.iter_mut() {
-        obj.mouse_state = *mouse_state;
 
-        // Update (CPU) 
-        match &obj.animation_type {
-            AnimationType::Rotate => {
-                // obj.transform.rotation[1] = elapsed,
-                println!("{:?}", obj.animation_type);
-                obj.transform.rotation[1] = -mouse_state.position.0 * std::f32::consts::PI;
-                obj.transform.rotation[0] = -mouse_state.position.1 * std::f32::consts::PI;
-            }
-            AnimationType::Pulse => {
-                let s = (elapsed.sin() + 1.0) / 2.0;
-                obj.transform.scale = [s, s, s];
-            },
-            AnimationType::Static => {},
-            AnimationType::Custom(func) => func(&mut obj.transform, elapsed),
-        }
+// ! This is cool animation that push objects away from mouse
+fn apply_mouse_repulsion(transform: &mut Transform, _original_pos: [f32; 3], mouse_state: &MouseState) {
+    if !mouse_state.inside_window { return; }
 
-        // Render (GPU)
-        builder.bind_vertex_buffers(0, (obj.mesh.vertices.clone(),)); 
+    let repulsion_radius = 2.5;
+    let repulsion_strength = 0.15;
     
-        let (buffer, descriptor_set) = &obj.per_frame_data[frame_index];
+    let aspect = 1920.0 / 1080.0;
+    let world_h = 10.0 * (45.0f32.to_radians() / 2.0).tan();
+    let world_w = world_h * aspect;
+
+    let mouse_world = [
+        mouse_state.position.0 * world_w,
+        mouse_state.position.1 * world_h, 
+        0.0
+    ];
+    
+    let from_mouse = [
+        transform.position[0] - mouse_world[0],
+        transform.position[1] - mouse_world[1],
+    ];
+    
+    let dist_sq = from_mouse[0]*from_mouse[0] + from_mouse[1]*from_mouse[1];
+    
+    if dist_sq < repulsion_radius * repulsion_radius && dist_sq > 0.001 {
+        let dist = dist_sq.sqrt();
+        let force = (1.0 - dist / repulsion_radius) * repulsion_strength;
         
-        let mut data = buffer.write().unwrap();
-        data.model = obj.transform.to_matrix();
-        
-        builder.bind_descriptor_sets(
-            PipelineBindPoint::Graphics,
-            pipeline.layout().clone(),
-            0,
-            descriptor_set.clone(), 
-        );
-        
-        if let Some(indices) = &obj.mesh.indices {
-            builder.bind_index_buffer(indices.clone());
-            builder.draw_indexed(obj.mesh.index_count, 1, 0, 0, 0).unwrap();
-        } else {
-            builder.draw(obj.mesh.vertex_count, 1, 0, 0).unwrap();
-        }
+        transform.position[0] += (from_mouse[0] / dist) * force;
+        transform.position[1] += (from_mouse[1] / dist) * force;
     }
+}
+
+// ! This is 100% useful, when object hit the window border, it pushes it away
+fn constrain_to_screen(transform: &mut Transform, original_pos: [f32; 3]) {
+    let aspect = 1920.0 / 1080.0;
+    let fov_rad = 45.0f32.to_radians();
+    
+    let distance = 10.0; 
+    
+    let visible_h = distance * (fov_rad / 2.0).tan();
+    let visible_w = visible_h * aspect;
+
+    let margin = 0.9;
+    let x_limit = visible_w * margin;
+    let y_limit = visible_h * margin;
+    
+    let mut pushed = false;
+    let push_strength = 0.1;
+
+    if transform.position[0] > x_limit {
+        transform.position[0] -= push_strength;
+        pushed = true;
+    } else if transform.position[0] < -x_limit {
+        transform.position[0] += push_strength;
+        pushed = true;
+    }
+    
+    if transform.position[1] > y_limit {
+        transform.position[1] -= push_strength;
+        pushed = true;
+    } else if transform.position[1] < -y_limit {
+        transform.position[1] += push_strength;
+        pushed = true;
+    }
+    
+    // ? I dont know when it can be useful
+    // if !pushed {
+    //     let return_speed = 0.02;
+    //     transform.position[0] += (original_pos[0] - transform.position[0]) * return_speed;
+    //     transform.position[1] += (original_pos[1] - transform.position[1]) * return_speed;
+    //     transform.position[2] += (original_pos[2] - transform.position[2]) * return_speed;
+    // }
 }
