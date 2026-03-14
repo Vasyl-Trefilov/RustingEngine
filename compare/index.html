@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Three.js Performance Test</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+      }
+    </script>
+    <script type="module">
+      import * as THREE from "three";
+      import Stats from "https://unpkg.com/three@0.160.0/examples/jsm/libs/stats.module.js";
+
+      const stats = new Stats();
+      document.body.appendChild(stats.dom);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(
+        45,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000,
+      );
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const count = 10000;
+      const radius = 100;
+      const geometry = new THREE.IcosahedronGeometry(0.2, 1);
+      const material = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        wireframe: true,
+      });
+
+      const mesh = new THREE.InstancedMesh(geometry, material, count);
+      scene.add(mesh);
+
+      const originals = [];
+      const dummy = new THREE.Object3D();
+
+      for (let i = 0; i < count; i++) {
+        // Spherical distribution
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const x = radius * Math.sin(phi) * Math.cos(theta);
+        const y = radius * Math.sin(phi) * Math.sin(theta);
+        const z = radius * Math.cos(phi);
+
+        originals.push(new THREE.Vector3(x, y, z));
+      }
+
+      function animate(time) {
+        const elapsed = time * 0.001;
+        const speed = 0.5;
+
+        for (let i = 0; i < count; i++) {
+          const orig = originals[i];
+          const angle = elapsed * speed;
+
+          const x = orig.x * Math.cos(angle) - orig.z * Math.sin(angle);
+          const z = orig.x * Math.sin(angle) + orig.z * Math.cos(angle);
+
+          dummy.position.set(x, orig.y, z);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(i, dummy.matrix);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+
+        renderer.render(scene, camera);
+        stats.update();
+        requestAnimationFrame(animate);
+      }
+
+      camera.position.z = 300;
+      requestAnimationFrame(animate);
+    </script>
+  </body>
+</html>

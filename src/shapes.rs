@@ -301,6 +301,21 @@ pub mod shapes {
         vertices.push(VertexPosColor { position: p1, color, barycentric: [0.0, 0.0, 1.0] });
     }
 
+    pub fn create_triangle(
+        memory_allocator: &Arc<StandardMemoryAllocator>,
+        color: [f32; 3],
+    ) -> Mesh {
+        let mut vertices: Vec<VertexPosColor> = Vec::new();
+
+        let v = [
+            [-0.5, -0.5,  0.0], [0.5, -0.5,  0.0], [0.0,  0.5,  0.0]
+        ];
+
+        add_triangle(&mut vertices, v[0], v[1], v[2], color);
+
+        Mesh::new(memory_allocator, &vertices, None)
+    }
+
     // * Create a unit cube centered at origin
     pub fn create_cube(
         memory_allocator: &Arc<StandardMemoryAllocator>,

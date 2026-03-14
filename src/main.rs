@@ -73,6 +73,8 @@ use shapes::shapes::{
     create_torus, // ! thats looks so sick, I am proud of myself, just a bit
 };
 
+use crate::shapes::shapes::create_triangle;
+
 // ! MOUSE 
 #[derive(Clone, Copy, Debug)]
 struct MouseState {
@@ -157,22 +159,12 @@ impl Behavior for RotateBehavior {
 }
 
 // ? I dont want to describe it, maybe I will delete it, bc I dont like it.
-enum AnimationType {
+#[derive(Clone)]
+pub enum AnimationType {
     Rotate,
     Pulse,
     Static,
-    Custom(Box<dyn Fn(&mut Transform, f32) + Send + Sync>),
-}
-
-impl Clone for AnimationType {
-    fn clone(&self) -> Self {
-        match self {
-            AnimationType::Rotate => AnimationType::Rotate,
-            AnimationType::Pulse => AnimationType::Pulse,
-            AnimationType::Static => AnimationType::Static,
-            AnimationType::Custom(_) => panic!("Cannot clone custom animation"),
-        }
-    }
+    Custom(Arc<dyn Fn(&mut Transform, &mut [f32; 3], &mut [f32; 3], f32) + Send + Sync>),
 }
 
 impl std::fmt::Debug for AnimationType {
@@ -181,10 +173,21 @@ impl std::fmt::Debug for AnimationType {
             AnimationType::Rotate => write!(f, "Rotate"),
             AnimationType::Pulse => write!(f, "Pulse"),
             AnimationType::Static => write!(f, "Static"),
-            AnimationType::Custom(_) => write!(f, "Custom(<closure>)"),
+            AnimationType::Custom(_) => write!(f, "Custom Logic"),
         }
     }
 }
+
+// impl Clone for AnimationType {
+//     fn clone(&self) -> Self {
+//         match self {
+//             AnimationType::Rotate => AnimationType::Rotate,
+//             AnimationType::Pulse => AnimationType::Pulse,
+//             AnimationType::Static => AnimationType::Static,
+//             AnimationType::Custom(_) => AnimationType::Custom(_),
+//         }
+//     }
+// }
 
 
 // ! UNIFORM BUFFER OBJECT - Matrix data sent to GPU each frame
@@ -201,14 +204,14 @@ impl Default for UniformBufferObject {
         let fov = 45.0f32.to_radians();
         let f = 1.0 / (fov / 2.0).tan();
         let z_near = 0.1;
-        let z_far = 100.0;
+        let z_far = 500.0;
         
         Self {
             view: [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
                 [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 5.0, 1.0],
+                [0.0, 0.0, -350.0, 1.0],
             ],
             proj: [
                 [f / aspect, 0.0, 0.0, 0.0],
@@ -339,13 +342,14 @@ mod fs {
             layout(location = 0) out vec4 f_color;
 
             void main() {
-                float min_dist = min(v_barycentric.x, min(v_barycentric.y, v_barycentric.z));
-                if (min_dist < 0.01) {
-                    f_color = vec4(1.0, 1.0, 1.0, 1.0);
-                } else {
-                    discard; // discard for wireframe, and color for collor, if you dont want to see any wireframe at all, you can comment upper lines, bc they build the wireframe
+                // float min_dist = min(v_barycentric.x, min(v_barycentric.y, v_barycentric.z));
+                // if (min_dist < 0.01) {
+                    // f_color = vec4(1.0, 1.0, 1.0, 1.0);
+                // } else {
+                    f_color = vec4(1.0,1.0,1.0,1.0);
+                    // discard; // discard for wireframe, and color for collor, if you dont want to see any wireframe at all, you can comment upper lines, bc they build the wireframe
                     // f_color = vec4(v_color,1.0);
-                }
+                // }
             }
             
             
@@ -366,7 +370,7 @@ fn main() {
     let aspect = dims[0] as f32 / dims[1] as f32;
     let fov = 45.0f32.to_radians();  // Field of view in radians, its like a minecraft fov, if you know
     let z_near = 0.1;                 // Near clipping plane, it means, if some object is 0.1 from camera, it will not be shown
-    let z_far = 100.0;                 // Far clipping plane, how far can 'camera' see
+    let z_far = 500.0;                 // Far clipping plane, how far can 'camera' see, you can set like 1000 if you are not developing some AAA game, but if you do, I guess you know better then me what to do
     let f = 1.0 / (fov / 2.0).tan();   // Focal length calculation, yes, just google it if you need
 
     // ! PROJECTION MATRIX - Converts 3D to 2D screen coordinates
@@ -381,7 +385,7 @@ fn main() {
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 10.0, 1.0], 
+        [0.0, 0.0, 350.0, 1.0], // * This third value is camera position, but remeber, in OpenGL and THREE.js we use -Z to go back, in Vulkan we use +Z, so Z=350 in vulkan is Z=-350 in THREE.js/OpenGL
     ];
     // ! So here is formule of reaching a border of the window 'clip = proj * view * model * vec4(position,1)', I would describe with example, but its too big, google if you want
 
@@ -437,8 +441,8 @@ fn main() {
             image_extent: window.inner_size().into(),
             image_usage: ImageUsage::COLOR_ATTACHMENT,  // We'll draw to these images
             composite_alpha: caps.supported_composite_alpha.into_iter().next().unwrap(),
-            // present_mode: PresentMode::Immediate,  // Show frames immediately (no vsync), can be used for benchmarking or just for fun
-            present_mode: PresentMode::Fifo, // So, only Fifo is guaranteed to be supported on every device. And I think its better for some kind of prod, if I ever will get to this point, but for now, I want to see the maximum fps, so I will use Immediate, but if you want to use Fifo, its your choise
+            present_mode: PresentMode::Immediate,  // Show frames immediately (no vsync), can be used for benchmarking or just for fun
+            // present_mode: PresentMode::Fifo, // So, only Fifo is guaranteed to be supported on every device. And I think its better for some kind of prod, if I ever will get to this point, but for now, I want to see the maximum fps, so I will use Immediate, but if you want to use Fifo, its your choise
             ..Default::default()
         }).unwrap();
         (sw, img)
@@ -573,7 +577,7 @@ fn main() {
     // let sphere_mesh = create_sphere(&memory_allocator, [1.0, 0.0, 0.0], 8, 4);  
 
     // * Create a subdivided sphere
-    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0, 0.0, 0.0], 2);  
+    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0, 0.0, 0.0], 0);  
 
     // * Crete a plane, so flat as my female classmates..
     let plane_mesh = create_plane(&memory_allocator, [1.0, 0.0, 0.0], 2.0, 2.0);  
@@ -611,40 +615,86 @@ fn main() {
     // ! A SCENE, now I will start render with scene, its already very solid, I want to make it more easy for people
     let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 1000);
 
-    let mut rng = rand::rng();
+    let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
+    let tetra_mesh = create_tetrahedron(&memory_allocator, [1.0, 0.0, 0.0]); 
+    let mut rng = rand::rng(); // ! If chatGPT or any other model will tel you to do rand:thread_rng() and then thread_generate() or something like that, dont listen, they have old data
     // * I create a cool animation with random objects, here you can find cool Transform, velocity and etc. usage
-    let meshes = [cube_mesh, sphere_sub_mesh, tetra_mesh, octa_mesh, ico_mesh, torus_mesh, cylinder_mesh, cone_mesh, pyramid_mesh];
-    for _ in 0..30 {
-        let x = rng.random_range(-7.0..7.0);
-        let y = rng.random_range(-7.0..7.0);
-        let mesh_index = rng.random_range(0..meshes.len());
-        let mut scale = 0.0;
-        if mesh_index == 4 {
-            scale = rng.random_range(0.3..0.5);
-        } else {
-            scale = rng.random_range(0.5..0.8);
-        }
+    // let meshes = [cube_mesh, sphere_sub_mesh, tetra_mesh, octa_mesh, ico_mesh, torus_mesh, cylinder_mesh, cone_mesh, pyramid_mesh];
 
-        let angle = rng.random_range(0.0..std::f32::consts::TAU);
-        let speed = 0.005; 
-        let vx = angle.cos() * speed;
-        let vy = angle.sin() * speed;
+    // ! SO THIS IS HUGE, it render a 100k triangels and create a rotating sphere, with my GPU(rtx 3050ti mobile) it render in ~280fps middle, and OpenGL SUCKS, BC IT RENDER ONLY IN 60 FPS with same logic, but on low level, not like my library
+
+    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 100000);
+
+    let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
+    let mut rng = rand::rng();
+    let stars_logic = AnimationType::Custom(Arc::new(|transform, _velocity, original_pos, elapsed| {
+        let speed = 0.1; 
+        let angle = elapsed * speed;
+        
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+
+        transform.position[0] = original_pos[0] * cos_a - original_pos[2] * sin_a;
+        transform.position[2] = original_pos[0] * sin_a + original_pos[2] * cos_a;
+        
+    }));
+
+    for _ in 0..100000 {
+        let radius = 100.0; 
+        
+        let theta = rng.random_range(0.0..std::f32::consts::TAU);
+        let phi = rng.random_range(0.0..std::f32::consts::PI);
+        
+        let x = radius * phi.sin() * theta.cos();
+        let y = radius * phi.sin() * theta.sin();
+        let z = radius * phi.cos();
 
         scene.add_instance(
-            // tetra_mesh.clone(),
-            meshes[mesh_index].clone(),
+            triangle.clone(),
             Instance {
                 transform: Transform {
-                    position: [x, y, 0.0],
-                    scale: [scale,scale,scale],
+                    position: [x, y, z],
+                    scale: [0.2, 0.2, 0.2],
                     ..Default::default()
                 },
-                original_position: [x, y, 0.0],
-                animation: AnimationType::Rotate, // I added Animation to rotate object, bc its easy and built in by me, but for more complex animation, I will create a seperate one.
-                velocity: [vx, vy, 0.0],
+                original_position: [x, y, z], 
+                animation: stars_logic.clone(),
+                velocity: [0.0, 0.0, 0.0],
             }
         );
     }
+
+    // for _ in 0..30 {
+    //     let x = rng.random_range(-7.0..7.0);
+    //     let y = rng.random_range(-7.0..7.0);
+    //     let mesh_index = rng.random_range(0..meshes.len());
+    //     let mut scale = 0.0;
+    //     if mesh_index == 4 {
+    //         scale = rng.random_range(0.3..0.5);
+    //     } else {
+    //         scale = rng.random_range(0.5..0.8);
+    //     }
+
+    //     let angle = rng.random_range(0.0..std::f32::consts::TAU);
+    //     let speed = 0.005; 
+    //     let vx = angle.cos() * speed;
+    //     let vy = angle.sin() * speed;
+
+    //     scene.add_instance(
+    //         // tetra_mesh.clone(),
+    //         meshes[mesh_index].clone(),
+    //         Instance {
+    //             transform: Transform {
+    //                 position: [x, y, 0.0],
+    //                 scale: [scale,scale,scale],
+    //                 ..Default::default()
+    //             },
+    //             original_position: [x, y, 0.0],
+    //             animation: AnimationType::Rotate, // I added Animation to rotate object, bc its easy and built in by me, but for more complex animation, I will create a seperate one.
+    //             velocity: [vx, vy, 0.0],
+    //         }
+    //     );
+    // }
     // cube.animation_type = AnimationType::Custom(Box::new(|transform, elapsed| {
     //     transform.position[0] = elapsed.cos() * 2.0;
     //     transform.rotation[0] = elapsed;
@@ -703,37 +753,12 @@ fn main() {
                 
                 match button {
                     winit::event::MouseButton::Left => {
-                        if !is_pressed && prev_mouse_state.left_pressed {
-                            mouse_state.left_clicked = true;
-                            
-                            mesh_index = (mesh_index + 1) % 13;
-                            // Some cool Meshes switch on click, only if render render_objects, I think I will delete it soon, bc I make scenes now
-                            let new_mesh = match mesh_index {
-                                0 => create_cube(&memory_allocator, [0.0, 1.0, 0.0]),
-                                1 => create_sphere(&memory_allocator, [1.0, 0.0, 0.0], 32, 16),
-                                2 => create_sphere_subdivided(&memory_allocator, [1.0, 0.0, 0.0], 3), 
-                                3 => create_plane(&memory_allocator, [1.0, 0.0, 0.0], 2.0, 2.0),
-                                4 => create_tetrahedron(&memory_allocator, [1.0, 0.0, 0.0]),
-                                5 => create_octahedron(&memory_allocator, [0.0, 0.0, 1.0]),
-                                6 => create_icosahedron(&memory_allocator, [1.0, 1.0, 0.0]),
-                                7 => create_dodecahedron(&memory_allocator, [1.0, 1.0, 0.0]),
-                                8 => create_grid(&memory_allocator, [1.0, 1.0, 0.0], 4.0, 8),
-                                9 => create_torus(&memory_allocator, [1.0, 0.0, 1.0], 1.0, 0.3, 20, 10), 
-                                10 => create_cylinder(&memory_allocator, [0.0, 1.0, 1.0], 0.5, 1.0, 16), 
-                                11 => create_cone(&memory_allocator, [1.0, 0.5, 0.0], 0.5, 1.0, 16), 
-                                12 => create_pyramid(&memory_allocator, [0.5, 0.0, 0.5], 1.0, 1.0),
-                                _ => create_cube(&memory_allocator, [0.0, 1.0, 0.0]),
-                            };
-                            
-                            if let Some(obj) = render_objects.get_mut(0) {
-                                obj.mesh = new_mesh;
-                            }
-                            
-                            println!("Switched to mesh {}", mesh_index);
-                        } else {
-                            mouse_state.left_clicked = false;
-                        }
-                        mouse_state.left_pressed = is_pressed;
+                        // if !is_pressed && prev_mouse_state.left_pressed {
+                        //     mouse_state.left_clicked = true;
+                        // } else {
+                        //     mouse_state.left_clicked = false;
+                        // }
+                        // mouse_state.left_pressed = is_pressed;
                     },
                     winit::event::MouseButton::Right => {
                         if !is_pressed && prev_mouse_state.right_pressed {

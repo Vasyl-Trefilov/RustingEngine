@@ -40,17 +40,17 @@ struct FrameData {
 impl RenderScene {
 
     pub fn add_instance(&mut self, mesh: Mesh, instance: Instance) {
-        println!("Adding instance at position: {:?}", instance.transform.position);
+        // println!("Adding instance at position: {:?}", instance.transform.position);
         
         for batch in &mut self.batches {
             if batch.mesh.vertex_count == mesh.vertex_count {
                 batch.instances.push(instance);
-                println!("Added to existing batch, total instances: {}", batch.instances.len());
+                // println!("Added to existing batch, total instances: {}", batch.instances.len());
                 return;
             }
         }
         
-        println!("Creating new batch for mesh");
+        // println!("Creating new batch for mesh");
         self.batches.push(RenderBatch {
             mesh,
             instances: vec![instance],
@@ -120,64 +120,38 @@ impl RenderScene {
 
     // ! This is update of all object in scene, NOT RENDER, update data of each object
     pub fn update(&mut self, elapsed: f32, mouse: &MouseState) {
-        let aspect = 1920.0 / 1080.0;
-        let world_h = 10.0 * (45.0f32.to_radians() / 2.0).tan();
-        let world_w = world_h * aspect;
+        // let aspect = 1920.0 / 1080.0;
+        // let world_h = 10.0 * (45.0f32.to_radians() / 2.0).tan();
+        // let world_w = world_h * aspect;
         
-        let margin = 1.0;
-        let x_limit = world_w * margin;
-        let y_limit = world_h * margin;
+        // let margin = 1.0;
+        // let x_limit = world_w * margin;
+        // let y_limit = world_h * margin;
 
         for batch in &mut self.batches {
             for inst in &mut batch.instances {
                 
-                inst.transform.position[0] += inst.velocity[0];
-                inst.transform.position[1] += inst.velocity[1];
-
-                // 2. MOUSE REPULSOR (Newtonian Force)
-                if mouse.inside_window {
-                    let mouse_world = [mouse.position.0 * world_w, mouse.position.1 * world_h];
-                    let from_mouse = [
-                        inst.transform.position[0] - mouse_world[0],
-                        inst.transform.position[1] - mouse_world[1],
-                    ];
-                    let dist_sq = from_mouse[0]*from_mouse[0] + from_mouse[1]*from_mouse[1];
-                    
-                    let radius = 2.5;
-                    if dist_sq < radius * radius {
-                        let dist = dist_sq.sqrt().max(0.1);
-                        let push_strength = 0.001; 
-                        let force = (1.0 - dist / radius) * push_strength;
-                        inst.velocity[0] += (from_mouse[0] / dist) * force;
-                        inst.velocity[1] += (from_mouse[1] / dist) * force;
-                    }
-                }
-
-                if inst.transform.position[0].abs() > x_limit {
-                    inst.transform.position[0] = x_limit * inst.transform.position[0].signum();
-                    inst.velocity[0] *= -1.0;
-                }
-                if inst.transform.position[1].abs() > y_limit {
-                    inst.transform.position[1] = y_limit * inst.transform.position[1].signum();
-                    inst.velocity[1] *= -1.0;
-                }
-
-                let max_speed = 0.05;
-                let current_speed_sq = inst.velocity[0]*inst.velocity[0] + inst.velocity[1]*inst.velocity[1];
-                if current_speed_sq > max_speed * max_speed {
-                    let current_speed = current_speed_sq.sqrt();
-                    inst.velocity[0] = (inst.velocity[0] / current_speed) * max_speed;
-                    inst.velocity[1] = (inst.velocity[1] / current_speed) * max_speed;
-                }
-                inst.velocity[0] *= 0.999;
-                inst.velocity[1] *= 0.999;
                 match &inst.animation {
+                    AnimationType::Custom(logic) => {
+                        // This is where you and I will make cool custom animations like in THREE.js
+                        logic(&mut inst.transform, &mut inst.velocity, &mut inst.original_position, elapsed);
+                    }
                     AnimationType::Rotate => {
                         inst.transform.rotation[0] += 0.005;
                         inst.transform.rotation[1] += 0.008;
                     }
-                    _ => {}
+                    AnimationType::Pulse => {
+                        let s = 1.0 + (elapsed * 2.0).sin() * 0.2;
+                        inst.transform.uniform_scale(s);
+                    }
+                    AnimationType::Static => {}
                 }
+
+                // Apply Physics
+                // ? I think I will add a physics engine in my engine, aaa, I cant wait
+                // inst.transform.position[0] += inst.velocity[0];
+                // inst.transform.position[1] += inst.velocity[1];
+                // inst.transform.position[2] += inst.velocity[2];
             }
         }
     }
