@@ -128,11 +128,15 @@ struct RenderObject {
 #[derive(Clone)]
 pub struct Instance {
     pub transform: Transform,
-    pub original_position: [f32; 3],
+    pub color: [f32; 3],
+    pub shininess: f32,          
+    pub specular_strength: f32,  
+    pub roughness: f32,    
+    pub metalness: f32,
     pub animation: AnimationType,
-    pub velocity: [f32; 3],
     pub model_matrix: [[f32; 4]; 4],
-    pub color: [f32; 3], 
+    pub original_position: [f32; 3],
+    pub velocity: [f32; 3],
 }
 
 impl Default for Instance {
@@ -144,6 +148,10 @@ impl Default for Instance {
             velocity: [0.0, 0.0, 0.0],
             model_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], 
             color: [1.0, 1.0, 1.0],
+            specular_strength: 0.5,
+            shininess: 32.0,
+            roughness: 0.5,
+            metalness: 0.5
         }
     }
 }
@@ -151,9 +159,14 @@ impl Default for Instance {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct InstanceData {
-    pub model: [[f32; 4]; 4],
-    pub color: [f32; 3], // Add color here!
-    pub padding: f32,    // Keep it aligned to 16 bytes
+    pub model: [[f32; 4]; 4], // 64 bytes
+    pub color: [f32; 3], // 12 bytes
+    pub shininess: f32, // 4 bytes (Total 80)
+    pub specular_strength: f32, // 4 bytes
+    pub roughness: f32, // 4 bytes
+    pub metalness: f32, // 4 bytes
+    pub padding: f32,   // hahaha, so basically, this shit is useless, but we need it, bc I said(we really need it to keep data in 16 bytes for GPU)
+    // Total 96, perfect for GPU, bc 96 mod 16 is 0
 }
 
 pub struct RenderBatch {
@@ -213,6 +226,7 @@ impl std::fmt::Debug for AnimationType {
 pub struct UniformBufferObject {
     pub view: [[f32; 4]; 4],
     pub proj: [[f32; 4]; 4],
+    pub eye_pos: [f32; 3]
 }
 
 impl Default for UniformBufferObject {
@@ -228,7 +242,7 @@ impl Default for UniformBufferObject {
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
                 [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, -350.0, 1.0],
+                [0.0, 0.0, 5.0, 1.0],
             ],
             proj: [
                 [f / aspect, 0.0, 0.0, 0.0],
@@ -236,6 +250,9 @@ impl Default for UniformBufferObject {
                 [0.0, 0.0, (z_far + z_near) / (z_far - z_near), 1.0],
                 [0.0, 0.0, -(2.0 * z_far * z_near) / (z_far - z_near), 0.0],
             ],
+            eye_pos: [
+                0.0, 0.0, 5.0
+            ]
         }
     }
 }
@@ -258,7 +275,7 @@ fn create_render_object(
             memory_allocator,
             BufferCreateInfo { usage: BufferUsage::UNIFORM_BUFFER, ..Default::default() },
             AllocationCreateInfo { usage: MemoryUsage::Upload, ..Default::default() },
-            UniformBufferObject { view, proj },  // No model here
+            UniformBufferObject { view, proj, eye_pos: [view[3][0], view[3][1], view[3][2]] },  // No model here
         ).unwrap();
 
         let descriptor_set = PersistentDescriptorSet::new(
@@ -325,14 +342,17 @@ mod vs {
         layout(location = 6) in vec4 model_row2;
         layout(location = 7) in vec4 model_row3;
         layout(location = 8) in vec3 instance_color; 
+        layout(location = 9) in vec4 instance_mat_props;
 
         layout(location = 0) out vec3 v_color;
         layout(location = 1) out vec3 v_normal;
         layout(location = 2) out vec3 v_pos;
+        layout(location = 3) out vec4 v_mat_data; 
 
         layout(set = 0, binding = 0) uniform UniformBufferObject {
             mat4 view;
             mat4 proj;
+            vec3 eye_pos;
         } ubo;
 
         void main() {
@@ -348,6 +368,7 @@ mod vs {
             v_color = instance_color; 
             
             v_normal = mat3(instance_model) * normal; 
+            v_mat_data = instance_mat_props;
         }
         "
     }
@@ -363,30 +384,45 @@ mod fs {
             layout(location = 0) in vec3 v_color;
             layout(location = 1) in vec3 v_normal;
             layout(location = 2) in vec3 v_pos;
+            layout(location = 3) in vec4 v_mat_data;
 
+            layout(set = 0, binding = 0) uniform UniformBufferObject {
+                mat4 view;
+                mat4 proj;
+                vec3 eye_pos; 
+            } ubo;
             layout(location = 0) out vec4 f_color;
 
             void main() {
-                vec3 light_pos = vec3(0.0, 100.0, 0.0); // A light in the sky, like a sun, I will add custom light later(sun, pointerLight and areaLight)
-                vec3 light_color = vec3(5.0, 5.0, 5.0);
+                float shininess = v_mat_data.x;
+                float spec_strength = v_mat_data.y;
+                float roughness = v_mat_data.z;
+                float metalness = v_mat_data.w;
 
-                float dist = length(light_pos - v_pos);
-                float light_radius = 200.0;
+                vec3 light_pos = vec3(10.0, 10.0, -40.0); // A light in the sky, like a sun, I will add custom light later(sun, pointerLight and areaLight)
+                vec3 light_color = vec3(1.0, 1.0, 1.0);
 
-                float attenuation = clamp(1.0 - (dist / light_radius), 0.0, 1.0);
-
-                // Ambient light, so light will never fall under this variable //
-                float ambient_strength = 0.05; // <=============================
-                vec3 ambient = ambient_strength * light_color;
-                
-                // Diffuse light, its like a main light calculate
                 vec3 norm = normalize(v_normal);
                 vec3 light_dir = normalize(light_pos - v_pos);
+                vec3 view_dir = normalize(ubo.eye_pos - v_pos);
+                vec3 halfway_dir = normalize(light_dir + view_dir);
+
                 float diff = max(dot(norm, light_dir), 0.0);
-                vec3 diffuse = (diff * attenuation) * light_color;
+                vec3 diffuse = diff * light_color * (1.0 - metalness); 
+
+                float ambient_strength = 0.05;
+                vec3 ambient = ambient_strength * light_color * (1.0 - metalness);
+
+                vec3 spec_color = mix(vec3(1.0), v_color, metalness); 
                 
-                vec3 result = (ambient + diffuse) * v_color; 
+                float spec_angle = max(dot(norm, halfway_dir), 0.0);
+                float spec_factor = pow(spec_angle, shininess) * (1.0 - roughness);
+                vec3 specular = spec_strength * spec_factor * light_color * spec_color;
+
+                vec3 result = (ambient + diffuse) * v_color + specular;
+                
                 f_color = vec4(result, 1.0);
+                // f_color = vec4(vec3(v_mat_data.y), 1.0); // spec_strength test
                 // f_color = vec4(1.0,1.0,1.0,1.0); // Debug, hardcoded white color for every pixel
             }
         "
@@ -421,8 +457,9 @@ fn main() {
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 350.0, 1.0], // * This third value is camera position, but remeber, in OpenGL and THREE.js we use -Z to go back, in Vulkan we use +Z, so Z=350 in vulkan is Z=-350 in THREE.js/OpenGL
+        [0.0, 0.0, 8.0, 1.0], // * This third value is camera position, but remeber, in OpenGL and THREE.js we use -Z to go back, in Vulkan we use +Z, so Z=350 in vulkan is Z=-350 in THREE.js/OpenGL
     ];
+    let eye_pos = [view[3][0],view[3][1],view[3][2]]; // * just use view 
     // ! So here is formule of reaching a border of the window 'clip = proj * view * model * vec4(position,1)', I would describe with example, but its too big, google if you want
 
     // ! VULKAN INITIALIZATION - Setting up the connection to the GPU
@@ -579,6 +616,11 @@ fn main() {
         binding: 1, 
         format: Format::R32G32B32_SFLOAT,
         offset: 64, 
+    })
+    .attribute(9, VertexInputAttributeDescription {
+        binding: 1, 
+        format: Format::R32G32B32A32_SFLOAT, 
+        offset: 80,
     });
 
     // ! GRAPHICS PIPELINE - The complete configuration for drawing
@@ -621,7 +663,7 @@ fn main() {
     // let sphere_mesh = create_sphere(&memory_allocator, [1.0, 0.0, 0.0], 8, 4);  
 
     // * Create a subdivided sphere
-    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0, 0.0, 0.0], 0);  
+    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0, 0.0, 0.0], 3);  
 
     // * Crete a plane, so flat as my female classmates..
     let plane_mesh = create_plane(&memory_allocator, [1.0, 0.0, 0.0], 2.0, 2.0);  
@@ -675,18 +717,74 @@ fn main() {
     }));
 
 
-    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 100000);
-    let cube_rotate = AnimationType::Rotate;
-    // scene.add_instance(create_cube(&memory_allocator, [0.0,1.0,0.0]), Instance {
-    //     transform: Transform {
-    //         position: [-1.0, 0.0, 0.0],
-    //         ..Default::default()
-    //     },
-    //     animation: cube_rotate.clone(),
-    //     color: [0.0,1.0,0.0],
-    //     ..Default::default()
-    // });
-    
+    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 100000);   
+
+    // * Materials testing, I am so close to THREE.js and so far in same time
+
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { 
+                position: [-4.0, 0.0, 0.0], 
+                ..Default::default() 
+            },
+            color: [0.95, 0.6, 0.35],        
+            shininess: 400.0,                 
+            specular_strength: 1.0,          
+            roughness: 0.05,                  
+            metalness: 1.0,                  
+            ..Default::default()
+        }
+    );
+
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { 
+                position: [-1.3, 0.0, 0.0], 
+                ..Default::default() 
+            },
+            color: [0.75, 0.75, 0.78],        
+            shininess: 150.0,                  
+            specular_strength: 0.9,          
+            roughness: 0.25,                    
+            metalness: 1.0,                   
+            ..Default::default()
+        }
+    );
+
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { 
+                position: [1.3, 0.0, 0.0], 
+                ..Default::default() 
+            },
+            color: [1.0, 0.85, 0.4],           
+            shininess: 250.0,                   
+            specular_strength: 0.95,            
+            roughness: 0.15,                   
+            metalness: 0.95,                     
+            ..Default::default()
+        }
+    );
+
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { 
+                position: [4.0, 0.0, 0.0], 
+                ..Default::default() 
+            },
+            color: [0.9, 0.92, 0.95],          
+            shininess: 1000.0,                  
+            specular_strength: 1.0,             
+            roughness: 0.0,                       
+            metalness: 1.0,                      
+            ..Default::default()
+        }
+    );
+
     // scene.add_instance(create_wrong_cube(&memory_allocator, [1.0,0.0,0.0]), Instance {
     //     transform: Transform {
     //         position: [1.0, 0.0, 0.0],
@@ -697,45 +795,47 @@ fn main() {
     //     ..Default::default()
     // });
 
-    let stars_logic = AnimationType::Custom(Arc::new(|transform, _velocity, original_pos, elapsed| {
-        let speed = 0.1; 
-        let angle = elapsed * speed;
-        
-        let cos_a = angle.cos();
-        let sin_a = angle.sin();
 
-        transform.position[0] = original_pos[0] * cos_a - original_pos[2] * sin_a;
-        transform.position[2] = original_pos[0] * sin_a + original_pos[2] * cos_a;
+    // * Very cool star sphere
+    // let stars_logic = AnimationType::Custom(Arc::new(|transform, _velocity, original_pos, elapsed| {
+    //     let speed = 0.1; 
+    //     let angle = elapsed * speed;
         
-    }));
+    //     let cos_a = angle.cos();
+    //     let sin_a = angle.sin();
 
-    for _ in 0..10000 {
-        let radius = 100.0; 
+    //     transform.position[0] = original_pos[0] * cos_a - original_pos[2] * sin_a;
+    //     transform.position[2] = original_pos[0] * sin_a + original_pos[2] * cos_a;
         
-        let theta = rng.random_range(0.0..std::f32::consts::TAU);
-        let phi = rng.random_range(0.0..std::f32::consts::PI);
+    // }));
+
+    // for _ in 0..10000 {
+    //     let radius = 100.0; 
         
-        let x = radius * phi.sin() * theta.cos();
-        let y = radius * phi.sin() * theta.sin();
-        let z = radius * phi.cos();
-        // let color = [rng.random_range(0.0..1.0),rng.random_range(0.0..1.0),rng.random_range(0.0..1.0)]; // This is easy and cool, but I am more dark/white guy(I mean, I like blackwhite style)
-        let color = [1.0,1.0,1.0];
-        scene.add_instance(
-            triangle.clone(),
-            Instance {
-                transform: Transform {
-                    position: [x, y, z],
-                    scale: [0.2, 0.2, 0.2],
-                    ..Default::default()
-                },
-                original_position: [x, y, z], 
-                animation: stars_logic.clone(),
-                velocity: [0.0, 0.0, 0.0],
-                color: color, 
-                model_matrix: [[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0]]
-            }
-        );
-    }
+    //     let theta = rng.random_range(0.0..std::f32::consts::TAU);
+    //     let phi = rng.random_range(0.0..std::f32::consts::PI);
+        
+    //     let x = radius * phi.sin() * theta.cos();
+    //     let y = radius * phi.sin() * theta.sin();
+    //     let z = radius * phi.cos();
+    //     // let color = [rng.random_range(0.0..1.0),rng.random_range(0.0..1.0),rng.random_range(0.0..1.0)]; // This is easy and cool, but I am more dark/white guy(I mean, I like blackwhite style)
+    //     let color = [1.0,1.0,1.0];
+    //     scene.add_instance(
+    //         triangle.clone(),
+    //         Instance {
+    //             transform: Transform {
+    //                 position: [x, y, z],
+    //                 scale: [0.2, 0.2, 0.2],
+    //                 ..Default::default()
+    //             },
+    //             original_position: [x, y, z], 
+    //             animation: stars_logic.clone(),
+    //             velocity: [0.0, 0.0, 0.0],
+    //             color: color, 
+    //             model_matrix: [[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0]]
+    //         }
+    //     );
+    // }
 
     // scene.add_instance(
     //     sphere_sub_mesh.clone(),
@@ -957,7 +1057,7 @@ fn main() {
                 // Scene render, entry point for my future library
                 // When I will release 1.0 version of library, I will try to avoid API changes
                 scene.update(elapsed, &mouse_state);
-                scene.render(&mut builder, &pipeline, &memory_allocator, frame_index, view, proj);
+                scene.render(&mut builder, &pipeline, &memory_allocator, frame_index, view, proj, eye_pos);
 
                 builder.end_render_pass().unwrap();
                 let command_buffer = builder.build().unwrap();

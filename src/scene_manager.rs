@@ -162,6 +162,7 @@ impl RenderScene {
         frame_index: usize,
         view: [[f32; 4]; 4], 
         proj: [[f32; 4]; 4],
+        eye_pos: [f32; 3],
     ) {
         let frame = &self.frames[frame_index];
         
@@ -169,12 +170,13 @@ impl RenderScene {
         if total_instances == 0 {
             return; 
         }
-        
+        // println!("View: {:?}, eye_pos: {:?}", view, eye_pos);
         assert!(total_instances <= frame.instance_buffer.len() as usize);
         {
             let mut ubo_data = frame.uniform_buffer.write().unwrap();
             ubo_data.view = view;
             ubo_data.proj = proj;
+            ubo_data.eye_pos = eye_pos;
         }
         // Map the buffer and write data
         {
@@ -183,7 +185,15 @@ impl RenderScene {
             
             for batch in &self.batches {
                 for inst in &batch.instances {
-                    data[current_instance] = InstanceData { model: inst.model_matrix, color: inst.color, padding: 0.0, };
+                    data[current_instance] = InstanceData { 
+                        model: inst.model_matrix, 
+                        color: inst.color, 
+                        padding: 0.0, 
+                        roughness: inst.roughness, 
+                        specular_strength: inst.specular_strength, 
+                        shininess: inst.shininess,
+                        metalness: inst.metalness,
+                 };
                     current_instance += 1;
                 }
             }
