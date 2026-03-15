@@ -49,7 +49,7 @@ use vulkano::pipeline::graphics::rasterization::PolygonMode;
 use vulkano::pipeline::graphics::color_blend::{ColorBlendState, ColorBlendAttachmentState};
 use vulkano::command_buffer::PrimaryAutoCommandBuffer;
 use vulkano::pipeline::graphics::vertex_input::VertexInputState;
-use std::panic;
+use std::{default, panic};
 use rand::prelude::*;
 mod scene_manager;
 use scene_manager::RenderScene;
@@ -64,7 +64,7 @@ use std::time::Instant;
 
 
 mod shapes;
-use shapes::{VertexPosColor, Mesh, Scene, SceneObject, Transform};
+use shapes::{VertexPosColorNormal, Mesh, Transform};
 use shapes::shapes::{
     create_cube, create_sphere, create_plane,
     create_cone, create_cylinder, create_dodecahedron, 
@@ -73,7 +73,7 @@ use shapes::shapes::{
     create_torus, // ! thats looks so sick, I am proud of myself, just a bit
 };
 
-use crate::shapes::shapes::create_triangle;
+use crate::shapes::shapes::{create_triangle, create_wrong_cube};
 
 // ! MOUSE 
 #[derive(Clone, Copy, Debug)]
@@ -131,12 +131,29 @@ pub struct Instance {
     pub original_position: [f32; 3],
     pub animation: AnimationType,
     pub velocity: [f32; 3],
+    pub model_matrix: [[f32; 4]; 4],
+    pub color: [f32; 3], 
+}
+
+impl Default for Instance {
+    fn default() -> Self {
+        Self {
+            transform: Transform::default(),
+            original_position: [0.0, 0.0, 0.0],
+            animation: AnimationType::Static,
+            velocity: [0.0, 0.0, 0.0],
+            model_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], 
+            color: [1.0, 1.0, 1.0],
+        }
+    }
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct InstanceData {
-    pub model: [[f32; 4]; 4],  // 4x4 matrix = 16 floats, important for next steps
+    pub model: [[f32; 4]; 4],
+    pub color: [f32; 3], // Add color here!
+    pub padding: f32,    // Keep it aligned to 16 bytes
 }
 
 pub struct RenderBatch {
@@ -301,16 +318,17 @@ mod vs {
 
         layout(location = 0) in vec3 position;
         layout(location = 1) in vec3 color;
-        layout(location = 2) in vec3 barycentric;
-
-        // Instance attributes - model matrix as 4 vec4s, as I said, remebmer the 16 in Instance struct
-        layout(location = 3) in vec4 model_row0;
-        layout(location = 4) in vec4 model_row1;
-        layout(location = 5) in vec4 model_row2;
-        layout(location = 6) in vec4 model_row3;
+        layout(location = 2) in vec3 normal;      
+        layout(location = 3) in vec3 barycentric; 
+        layout(location = 4) in vec4 model_row0;  // Instance data starts at 4, you can find it in GPU settings
+        layout(location = 5) in vec4 model_row1;
+        layout(location = 6) in vec4 model_row2;
+        layout(location = 7) in vec4 model_row3;
+        layout(location = 8) in vec3 instance_color; 
 
         layout(location = 0) out vec3 v_color;
-        layout(location = 1) out vec3 v_barycentric;
+        layout(location = 1) out vec3 v_normal;
+        layout(location = 2) out vec3 v_pos;
 
         layout(set = 0, binding = 0) uniform UniformBufferObject {
             mat4 view;
@@ -320,10 +338,16 @@ mod vs {
         void main() {
             mat4 instance_model = mat4(model_row0, model_row1, model_row2, model_row3);
             
-            gl_Position = ubo.proj * ubo.view * instance_model * vec4(position, 1.0);
+            // calculating world position
+            vec4 world_pos = instance_model * vec4(position, 1.0);
             
-            v_color = color;
-            v_barycentric = barycentric;
+            gl_Position = ubo.proj * ubo.view * world_pos;
+            
+            v_pos = world_pos.xyz; 
+            
+            v_color = instance_color; 
+            
+            v_normal = mat3(instance_model) * normal; 
         }
         "
     }
@@ -337,22 +361,34 @@ mod fs {
             #version 450
 
             layout(location = 0) in vec3 v_color;
-            layout(location = 1) in vec3 v_barycentric; 
+            layout(location = 1) in vec3 v_normal;
+            layout(location = 2) in vec3 v_pos;
 
             layout(location = 0) out vec4 f_color;
 
             void main() {
-                // float min_dist = min(v_barycentric.x, min(v_barycentric.y, v_barycentric.z));
-                // if (min_dist < 0.01) {
-                    // f_color = vec4(1.0, 1.0, 1.0, 1.0);
-                // } else {
-                    f_color = vec4(1.0,1.0,1.0,1.0);
-                    // discard; // discard for wireframe, and color for collor, if you dont want to see any wireframe at all, you can comment upper lines, bc they build the wireframe
-                    // f_color = vec4(v_color,1.0);
-                // }
+                vec3 light_pos = vec3(0.0, 100.0, 0.0); // A light in the sky, like a sun, I will add custom light later(sun, pointerLight and areaLight)
+                vec3 light_color = vec3(5.0, 5.0, 5.0);
+
+                float dist = length(light_pos - v_pos);
+                float light_radius = 200.0;
+
+                float attenuation = clamp(1.0 - (dist / light_radius), 0.0, 1.0);
+
+                // Ambient light, so light will never fall under this variable //
+                float ambient_strength = 0.05; // <=============================
+                vec3 ambient = ambient_strength * light_color;
+                
+                // Diffuse light, its like a main light calculate
+                vec3 norm = normalize(v_normal);
+                vec3 light_dir = normalize(light_pos - v_pos);
+                float diff = max(dot(norm, light_dir), 0.0);
+                vec3 diffuse = (diff * attenuation) * light_color;
+                
+                vec3 result = (ambient + diffuse) * v_color; 
+                f_color = vec4(result, 1.0);
+                // f_color = vec4(1.0,1.0,1.0,1.0); // Debug, hardcoded white color for every pixel
             }
-            
-            
         "
     }
 }
@@ -494,7 +530,7 @@ fn main() {
     // * So this is the hell part, this is some kind of GPU instructions, I use them to tell GPU, where and how does data looks like, like here is 36 bytes per vertex and 64 per Instance, why? Look at Instance struct.
     let vertex_input_state = VertexInputState::new()
     .binding(0, VertexInputBindingDescription {
-        stride: std::mem::size_of::<VertexPosColor>() as u32,
+        stride: std::mem::size_of::<VertexPosColorNormal>() as u32, // this might be 48 bytes, I guess, bc I have [[f32; 3], 4] in this color
         input_rate: VertexInputRate::Vertex,
     })
     .binding(1, VertexInputBindingDescription {
@@ -516,25 +552,33 @@ fn main() {
         format: Format::R32G32B32_SFLOAT,
         offset: 24,
     })
-    .attribute(3,VertexInputAttributeDescription {
-        binding: 1,
-        format: Format::R32G32B32A32_SFLOAT,
-        offset: 0,
+    .attribute(3, VertexInputAttributeDescription {
+        binding: 0, format: Format::R32G32B32_SFLOAT, offset: 36,
     })
     .attribute(4,VertexInputAttributeDescription {
         binding: 1,
         format: Format::R32G32B32A32_SFLOAT,
-        offset: 16,
+        offset: 0,
     })
     .attribute(5,VertexInputAttributeDescription {
         binding: 1,
         format: Format::R32G32B32A32_SFLOAT,
+        offset: 16,
+    })
+    .attribute(6,VertexInputAttributeDescription {
+        binding: 1,
+        format: Format::R32G32B32A32_SFLOAT,
         offset: 32,
     })
-    .attribute(6, VertexInputAttributeDescription {
+    .attribute(7, VertexInputAttributeDescription {
         binding: 1,
         format: Format::R32G32B32A32_SFLOAT,
         offset: 48, 
+    })
+    .attribute(8, VertexInputAttributeDescription {
+        binding: 1, 
+        format: Format::R32G32B32_SFLOAT,
+        offset: 64, 
     });
 
     // ! GRAPHICS PIPELINE - The complete configuration for drawing
@@ -623,10 +667,36 @@ fn main() {
 
     // ! SO THIS IS HUGE, it render a 100k triangels and create a rotating sphere, with my GPU(rtx 3050ti mobile) it render in ~280fps middle, and OpenGL SUCKS, BC IT RENDER ONLY IN 60 FPS with same logic, but on low level, not like my library
 
-    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 100000);
-
+    
     let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
     let mut rng = rand::rng();
+    let cube_glide = AnimationType::Custom(Arc::new(|transform, _velocity, _original_pos, elapsed|{
+        transform.position[0] = elapsed.sin();
+    }));
+
+
+    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 100000);
+    let cube_rotate = AnimationType::Rotate;
+    // scene.add_instance(create_cube(&memory_allocator, [0.0,1.0,0.0]), Instance {
+    //     transform: Transform {
+    //         position: [-1.0, 0.0, 0.0],
+    //         ..Default::default()
+    //     },
+    //     animation: cube_rotate.clone(),
+    //     color: [0.0,1.0,0.0],
+    //     ..Default::default()
+    // });
+    
+    // scene.add_instance(create_wrong_cube(&memory_allocator, [1.0,0.0,0.0]), Instance {
+    //     transform: Transform {
+    //         position: [1.0, 0.0, 0.0],
+    //         ..Default::default()
+    //     },
+    //     animation: cube_rotate,
+    //     color: [1.0,0.0,0.0],
+    //     ..Default::default()
+    // });
+
     let stars_logic = AnimationType::Custom(Arc::new(|transform, _velocity, original_pos, elapsed| {
         let speed = 0.1; 
         let angle = elapsed * speed;
@@ -639,7 +709,7 @@ fn main() {
         
     }));
 
-    for _ in 0..100000 {
+    for _ in 0..10000 {
         let radius = 100.0; 
         
         let theta = rng.random_range(0.0..std::f32::consts::TAU);
@@ -648,7 +718,8 @@ fn main() {
         let x = radius * phi.sin() * theta.cos();
         let y = radius * phi.sin() * theta.sin();
         let z = radius * phi.cos();
-
+        // let color = [rng.random_range(0.0..1.0),rng.random_range(0.0..1.0),rng.random_range(0.0..1.0)]; // This is easy and cool, but I am more dark/white guy(I mean, I like blackwhite style)
+        let color = [1.0,1.0,1.0];
         scene.add_instance(
             triangle.clone(),
             Instance {
@@ -660,9 +731,27 @@ fn main() {
                 original_position: [x, y, z], 
                 animation: stars_logic.clone(),
                 velocity: [0.0, 0.0, 0.0],
+                color: color, 
+                model_matrix: [[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0]]
             }
         );
     }
+
+    // scene.add_instance(
+    //     sphere_sub_mesh.clone(),
+    //     Instance {
+    //         transform: Transform {
+    //             position: [0.0, 100.0, 0.0],
+    //             scale: [20.0, 20.0, 20.0],
+    //             ..Default::default()
+    //         },
+    //         original_position: [0.0, 350.0, 0.0], 
+    //         animation: stars_logic.clone(),
+    //         velocity: [0.0, 0.0, 0.0],
+    //         color: [1.0,0.0,0.0],
+    //         model_matrix: [[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0]]
+    //     }
+    // );
 
     // for _ in 0..30 {
     //     let x = rng.random_range(-7.0..7.0);

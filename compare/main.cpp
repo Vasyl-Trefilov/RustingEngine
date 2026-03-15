@@ -7,7 +7,7 @@
 #include <iostream>
 #include <string>
 
-const int STAR_COUNT = 100000;
+const int STAR_COUNT = 100000; // ! Change count to same as in my library to make compare 
 
 const char* vertexShaderSource = R"(
 #version 330 core

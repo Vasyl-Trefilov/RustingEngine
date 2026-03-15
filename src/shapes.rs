@@ -44,13 +44,13 @@ impl VertexType for VertexPosColorUv {}
 #[derive(Copy, Clone, Debug, Vertex, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct VertexPosColorNormal {
     #[format(R32G32B32_SFLOAT)]
-    pub position: [f32; 3],
+    pub position: [f32; 3], // XYZ position
     #[format(R32G32B32_SFLOAT)]
-    pub color: [f32; 3],
+    pub color: [f32; 3],    // RGB color
     #[format(R32G32B32_SFLOAT)]
-    pub normal: [f32; 3],
+    pub normal: [f32; 3],   // Normals(for light)
     #[format(R32G32B32_SFLOAT)]
-    pub barycentric: [f32; 3],
+    pub barycentric: [f32; 3], // yes
 }
 
 impl VertexType for VertexPosColorNormal {}
@@ -58,7 +58,7 @@ impl VertexType for VertexPosColorNormal {}
 // ! MESH - Container for vertex and index data on the GPU
 #[derive(Clone)]
 pub struct Mesh {
-    pub vertices: Subbuffer<[VertexPosColor]>,   // GPU buffer of vertices
+    pub vertices: Subbuffer<[VertexPosColorNormal]>,   // GPU buffer of vertices
     pub indices: Option<Subbuffer<[u32]>>,       // Optional index buffer (for reuse)
     pub vertex_count: u32,                        // Number of vertices
     pub index_count: u32,                          // Number of indices (if using)
@@ -68,7 +68,7 @@ impl Mesh {
     // * Create a new mesh from CPU-side data
     pub fn new(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        vertices: &[VertexPosColor],
+        vertices: &[VertexPosColorNormal],
         indices: Option<&[u32]>,
     ) -> Self {
         // Upload vertices to GPU
@@ -117,7 +117,7 @@ impl Mesh {
     // * Create a mesh with indexed geometry (more efficient for complex shapes)
     pub fn new_indexed(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        vertices: &[VertexPosColor],
+        vertices: &[VertexPosColorNormal],
         indices: &[u32],
     ) -> Self {
         Self::new(memory_allocator, vertices, Some(indices))
@@ -188,86 +188,7 @@ impl Transform {
     // I am going crazy
 }
 
-// ! SCENE OBJECT - An instance of a mesh in the world
-pub struct SceneObject {
-    pub mesh: Mesh,
-    pub transform: Transform,
-    pub instance_data: Option<Subbuffer<[VertexPosColor]>>,  // For instanced rendering
-}
-
-impl SceneObject {
-    pub fn new(mesh: Mesh) -> Self {
-        Self {
-            mesh,
-            transform: Transform::default(),
-            instance_data: None,
-        }
-    }
-
-    // * Builder pattern methods
-    pub fn with_transform(mut self, transform: Transform) -> Self {
-        self.transform = transform;
-        self
-    }
-
-    pub fn with_position(mut self, x: f32, y: f32, z: f32) -> Self {
-        self.transform.position = [x, y, z];
-        self
-    }
-
-    pub fn with_rotation(mut self, x: f32, y: f32, z: f32) -> Self {
-        self.transform.rotation = [x, y, z];
-        self
-    }
-
-    pub fn with_scale(mut self, x: f32, y: f32, z: f32) -> Self {
-        self.transform.scale = [x, y, z];
-        self
-    }
-
-    pub fn with_instance_data(
-        mut self,
-        memory_allocator: &Arc<StandardMemoryAllocator>,
-        instances: &[VertexPosColor],
-    ) -> Self {
-        let buffer = Buffer::from_iter(
-            &memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::VERTEX_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                usage: MemoryUsage::Upload,
-                ..Default::default()
-            },
-            instances.iter().copied(),
-        ).unwrap();
-        
-        self.instance_data = Some(buffer);
-        self
-    }
-}
-
 // ? Why am I even writing a comments if I am the only one who read it, am I schizophrenic?
-
-// ! SCENE - Collection of objects to render
-pub struct Scene {
-    pub objects: Vec<RenderObject>,
-}
-
-impl Scene {
-    pub fn new() -> Self {
-        Self { objects: Vec::new() }
-    }
-
-    pub fn add_object(&mut self, object: RenderObject) {
-        self.objects.push(object);
-    }
-
-    pub fn clear(&mut self) {
-        self.objects.clear();
-    }
-}
 
 // ! PRIMITIVE SHAPES - Factory functions for creating common meshes
 pub mod shapes {
@@ -277,40 +198,80 @@ pub mod shapes {
     // Helper function to normalize a vector
     fn normalize(v: [f32; 3]) -> [f32; 3] {
         let len = (v[0]*v[0] + v[1]*v[1] + v[2]*v[2]).sqrt();
-        [v[0]/len, v[1]/len, v[2]/len]
+        if len > 0.0 {
+            [v[0]/len, v[1]/len, v[2]/len]
+        } else {
+            v
+        }
     }
 
+    fn calculate_normal(p1: [f32; 3], p2: [f32; 3], p3: [f32; 3]) -> [f32; 3] {
+        let u = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+        let v = [p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]];
+        
+        // Cross product
+        let normal = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0]
+        ];
+        
+        normalize(normal)
+    }
+
+
     // Helper function to add a triangle with barycentric coordinates
-    fn add_triangle(vertices: &mut Vec<VertexPosColor>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], color: [f32; 3]) {
-        vertices.push(VertexPosColor { position: p1, color, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColor { position: p2, color, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColor { position: p3, color, barycentric: [0.0, 0.0, 1.0] });
+    fn add_triangle(vertices: &mut Vec<VertexPosColorNormal>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], color: [f32; 3]) {
+        // Calculate face normal
+        let normal = calculate_normal(p1, p2, p3);
+        
+        vertices.push(VertexPosColorNormal { position: p1, color, normal, barycentric: [1.0, 0.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: p2, color, normal, barycentric: [0.0, 1.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: p3, color, normal, barycentric: [0.0, 0.0, 1.0] });
+    }
+
+    // * Wrong Normal triangle
+    fn add_wrong_triangle(vertices: &mut Vec<VertexPosColorNormal>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], color: [f32; 3]) {
+        // Calculate face normal
+        let mut normal = calculate_normal(p1, p2, p3);
+        normal[0] *= -1.0; 
+        normal[1] *= -1.0;
+        normal[2] *= -1.0;
+        vertices.push(VertexPosColorNormal { position: p1, color, normal, barycentric: [1.0, 0.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: p2, color, normal, barycentric: [0.0, 1.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: p3, color, normal, barycentric: [0.0, 0.0, 1.0] });
     }
 
     // Helper function to add a quad as two triangles
     // I dont know who will use it, maybe some chill guy                      or lady....
-    fn add_quad(vertices: &mut Vec<VertexPosColor>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], p4: [f32; 3], color: [f32; 3]) {
+        fn add_quad(vertices: &mut Vec<VertexPosColorNormal>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], p4: [f32; 3], color: [f32; 3]) {
+        // Calculate normal for first triangle
+        let normal1 = calculate_normal(p1, p2, p3);
+        // Calculate normal for second triangle
+        let normal2 = calculate_normal(p3, p4, p1);
+        
         // First triangle
-        vertices.push(VertexPosColor { position: p1, color, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColor { position: p2, color, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColor { position: p3, color, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorNormal { position: p1, color, normal: normal1, barycentric: [1.0, 0.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: p2, color, normal: normal1, barycentric: [0.0, 1.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: p3, color, normal: normal1, barycentric: [0.0, 0.0, 1.0] });
         
         // Second triangle
-        vertices.push(VertexPosColor { position: p3, color, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColor { position: p4, color, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColor { position: p1, color, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorNormal { position: p3, color, normal: normal2, barycentric: [1.0, 0.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: p4, color, normal: normal2, barycentric: [0.0, 1.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: p1, color, normal: normal2, barycentric: [0.0, 0.0, 1.0] });
     }
 
     pub fn create_triangle(
         memory_allocator: &Arc<StandardMemoryAllocator>,
         color: [f32; 3],
     ) -> Mesh {
-        let mut vertices: Vec<VertexPosColor> = Vec::new();
+        let mut vertices: Vec<VertexPosColorNormal> = Vec::new();
 
         let v = [
             [-0.5, -0.5,  0.0], [0.5, -0.5,  0.0], [0.0,  0.5,  0.0]
         ];
 
+        // Normal for a flat triangle in XY plane
         add_triangle(&mut vertices, v[0], v[1], v[2], color);
 
         Mesh::new(memory_allocator, &vertices, None)
@@ -321,41 +282,82 @@ pub mod shapes {
         memory_allocator: &Arc<StandardMemoryAllocator>,
         color: [f32; 3],
     ) -> Mesh {
-        let mut vertices: Vec<VertexPosColor> = Vec::new();
+        let mut vertices: Vec<VertexPosColorNormal> = Vec::new();
 
         let v = [
             [-0.5, -0.5,  0.5], [0.5, -0.5,  0.5], [0.5,  0.5,  0.5], [-0.5,  0.5,  0.5],
             [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5,  0.5, -0.5], [-0.5,  0.5, -0.5],
         ];
 
-        // Front face
+        // Front face (+Z)
         add_triangle(&mut vertices, v[0], v[1], v[2], color);
         add_triangle(&mut vertices, v[2], v[3], v[0], color);
         
-        // Right face
+        // Right face (+X)
         add_triangle(&mut vertices, v[1], v[5], v[6], color);
         add_triangle(&mut vertices, v[6], v[2], v[1], color);
         
-        // Back face
+        // Back face (-Z)
         add_triangle(&mut vertices, v[5], v[4], v[7], color);
         add_triangle(&mut vertices, v[7], v[6], v[5], color);
         
-        // Left face
+        // Left face (-X)
         add_triangle(&mut vertices, v[4], v[0], v[3], color);
         add_triangle(&mut vertices, v[3], v[7], v[4], color);
         
-        // Top face
+        // Top face (+Y)
         add_triangle(&mut vertices, v[3], v[2], v[6], color);
         add_triangle(&mut vertices, v[6], v[7], v[3], color);
         
-        // Bottom face
+        // Bottom face (-Y)
         add_triangle(&mut vertices, v[4], v[5], v[1], color);
         add_triangle(&mut vertices, v[1], v[0], v[4], color);
 
         Mesh::new(memory_allocator, &vertices, None)
     }
 
-    // * Create a sphere by subdividing into sectors and stacks
+    // * Wrong Cube, to test normals
+    pub fn create_wrong_cube(
+        memory_allocator: &Arc<StandardMemoryAllocator>,
+        color: [f32; 3],
+    ) -> Mesh {
+        let mut vertices: Vec<VertexPosColorNormal> = Vec::new();
+
+        let v = [
+            [-0.5, -0.5,  0.5], [0.5, -0.5,  0.5], [0.5,  0.5,  0.5], [-0.5,  0.5,  0.5],
+            [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5,  0.5, -0.5], [-0.5,  0.5, -0.5],
+        ];
+
+        // Front face (+Z)
+        add_wrong_triangle(&mut vertices, v[0], v[1], v[2], color);
+        add_wrong_triangle(&mut vertices, v[2], v[3], v[0], color);
+        
+        // Right face (+X)
+        add_wrong_triangle(&mut vertices, v[1], v[5], v[6], color);
+        add_wrong_triangle(&mut vertices, v[6], v[2], v[1], color);
+        
+        // Back face (-Z)
+        add_wrong_triangle(&mut vertices, v[5], v[4], v[7], color);
+        add_wrong_triangle(&mut vertices, v[7], v[6], v[5], color);
+        
+        // Left face (-X)
+        add_wrong_triangle(&mut vertices, v[4], v[0], v[3], color);
+        add_wrong_triangle(&mut vertices, v[3], v[7], v[4], color);
+        
+        // Top face (+Y)
+        add_wrong_triangle(&mut vertices, v[3], v[2], v[6], color);
+        add_wrong_triangle(&mut vertices, v[6], v[7], v[3], color);
+        
+        // Bottom face (-Y)
+        add_wrong_triangle(&mut vertices, v[4], v[5], v[1], color);
+        add_wrong_triangle(&mut vertices, v[1], v[0], v[4], color);
+
+        Mesh::new(memory_allocator, &vertices, None)
+    }
+
+
+    // * Create a sphere by subdividing into sectors and stacks, 
+    // ! DO NOT WRITE 16 OR 32, IT IS NOT TOTAL SUBDIVIDES!!!, write like 2-4 max
     pub fn create_sphere(
         memory_allocator: &Arc<StandardMemoryAllocator>,
         color: [f32; 3],
@@ -363,6 +365,7 @@ pub mod shapes {
         stacks: u32,
     ) -> Mesh {
         let mut vertices = Vec::new();
+        let mut indices = Vec::new();
         let radius = 0.5;
 
         for i in 0..=stacks {
@@ -375,15 +378,18 @@ pub mod shapes {
                 let x = xy * sector_angle.cos();
                 let y = xy * sector_angle.sin();
                 
-                vertices.push(VertexPosColor { 
+                // For smooth shading, normal is the normalized position vector
+                let normal = normalize([x, y, z]);
+                
+                vertices.push(VertexPosColorNormal { 
                     position: [x, y, z], 
-                    color, 
+                    color,
+                    normal,
                     barycentric: [1.0, 0.0, 0.0] 
                 });
             }
         }
 
-        let mut indices = Vec::new();
         for i in 0..stacks {
             for j in 0..sectors {
                 let p1 = i * (sectors + 1) + j;
@@ -421,7 +427,6 @@ pub mod shapes {
         color: [f32; 3],
         subdivisions: u32,
     ) -> Mesh {
-        // let mut vertices: Vec<_> = Vec::new();  // * Just will leave it here, bc why not
         let t = (1.0 + (5.0_f32).sqrt()) / 2.0;
         
         let initial_vertices = [
@@ -494,16 +499,21 @@ pub mod shapes {
             indices = new_indices;
         }
 
-        // Create final vertex list
+        // Create final vertex list with normals (normalized position for smooth shading)
         let mut final_vertices = Vec::new();
         for i in (0..indices.len()).step_by(3) {
-            let v1 = normalized_vertices[indices[i] as usize];
-            let v2 = normalized_vertices[indices[i + 1] as usize];
-            let v3 = normalized_vertices[indices[i + 2] as usize];
+            let v1_pos = normalized_vertices[indices[i] as usize];
+            let v2_pos = normalized_vertices[indices[i + 1] as usize];
+            let v3_pos = normalized_vertices[indices[i + 2] as usize];
             
-            final_vertices.push(VertexPosColor { position: v1, color, barycentric: [1.0, 0.0, 0.0] });
-            final_vertices.push(VertexPosColor { position: v2, color, barycentric: [0.0, 1.0, 0.0] });
-            final_vertices.push(VertexPosColor { position: v3, color, barycentric: [0.0, 0.0, 1.0] });
+            // For smooth shading, normal is the normalized position
+            let v1_normal = v1_pos;
+            let v2_normal = v2_pos;
+            let v3_normal = v3_pos;
+            
+            final_vertices.push(VertexPosColorNormal { position: v1_pos, color, normal: v1_normal, barycentric: [1.0, 0.0, 0.0] });
+            final_vertices.push(VertexPosColorNormal { position: v2_pos, color, normal: v2_normal, barycentric: [0.0, 1.0, 0.0] });
+            final_vertices.push(VertexPosColorNormal { position: v3_pos, color, normal: v3_normal, barycentric: [0.0, 0.0, 1.0] });
         }
 
         Mesh::new(memory_allocator, &final_vertices, None)
@@ -614,12 +624,15 @@ pub mod shapes {
         let phi = (1.0 + (5.0_f32).sqrt()) / 2.0;
         let a = 0.5;
 
-        // 12 vertices
-        let v = [
+        // 12 vertices (normalize to sphere for better shape)
+        let v_raw = [
             [-a,  phi,  0.0], [ a,  phi,  0.0], [-a, -phi,  0.0], [ a, -phi,  0.0],
             [0.0, -a,  phi], [0.0,  a,  phi], [0.0, -a, -phi], [0.0,  a, -phi],
             [ phi,  0.0, -a], [ phi,  0.0,  a], [-phi,  0.0, -a], [-phi,  0.0,  a],
         ];
+        
+        // Normalize vertices to lie on sphere
+        let v: Vec<[f32; 3]> = v_raw.iter().map(|&p| normalize(p)).collect();
 
         // 20 triangular faces
         let faces = [
@@ -636,7 +649,7 @@ pub mod shapes {
         Mesh::new(memory_allocator, &vertices, None)
     }
 
-    // * Create a torus
+    // * Create a torus, this shit has sick formula
     pub fn create_torus(
         memory_allocator: &Arc<StandardMemoryAllocator>,
         color: [f32; 3],
@@ -692,7 +705,7 @@ pub mod shapes {
 
                 // Create two triangles for the quad
                 add_triangle(&mut vertices, p1, p2, p3, color);
-                add_triangle(&mut vertices, p3, p4, p1, color);
+                add_triangle(&mut vertices, p3, p4, p1, color); // ! Change to add_quad, but now right now, bc I dont want to
             }
         }
 
@@ -720,9 +733,8 @@ pub mod shapes {
             ]);
         }
 
-        // Side faces (quads)
+        // Side faces (quads) - normals point radially outward
         for i in 0..sectors {
-            // Convert to usize for indexing
             let current_idx = i as usize;
             let next_idx = ((i + 1) % sectors) as usize;
             
@@ -747,11 +759,21 @@ pub mod shapes {
                 half_height
             ];
 
-            add_triangle(&mut vertices, p1, p2, p3, color);
-            add_triangle(&mut vertices, p3, p4, p1, color);
+            // For sides, we need radial normals
+            let normal = normalize([circle_points[current_idx][0], circle_points[current_idx][1], 0.0]);
+            
+            // Add triangles with proper normals
+            vertices.push(VertexPosColorNormal { position: p1, color, normal, barycentric: [1.0, 0.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p2, color, normal, barycentric: [0.0, 1.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p3, color, normal, barycentric: [0.0, 0.0, 1.0] });
+            
+            vertices.push(VertexPosColorNormal { position: p3, color, normal, barycentric: [1.0, 0.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p4, color, normal, barycentric: [0.0, 1.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p1, color, normal, barycentric: [0.0, 0.0, 1.0] });
         }
 
-        // Top cap (triangles from center)
+        // Top cap (triangles from center) - normal points up (+Y)
+        let top_normal = [0.0, 0.0, 1.0];
         for i in 0..sectors {
             let current_idx = i as usize;
             let next_i = ((i + 1) % sectors) as usize;
@@ -759,10 +781,13 @@ pub mod shapes {
             let p2 = [circle_points[current_idx][0], circle_points[current_idx][1], half_height];
             let p3 = [circle_points[next_i][0], circle_points[next_i][1], half_height];
 
-            add_triangle(&mut vertices, p1, p2, p3, color);
+            vertices.push(VertexPosColorNormal { position: p1, color, normal: top_normal, barycentric: [1.0, 0.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p2, color, normal: top_normal, barycentric: [0.0, 1.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p3, color, normal: top_normal, barycentric: [0.0, 0.0, 1.0] });
         }
 
-        // Bottom cap (triangles from center)
+        // Bottom cap (triangles from center) - normal points down (-Y)
+        let bottom_normal = [0.0, 0.0, -1.0];
         for i in 0..sectors {
             let current_idx = i as usize;
             let next_i = ((i + 1) % sectors) as usize;
@@ -771,7 +796,9 @@ pub mod shapes {
             let p2 = [circle_points[current_idx][0], circle_points[current_idx][1], -half_height];
             let p3 = [circle_points[next_i][0], circle_points[next_i][1], -half_height];
 
-            add_triangle(&mut vertices, p1, p2, p3, color);
+            vertices.push(VertexPosColorNormal { position: p1, color, normal: bottom_normal, barycentric: [1.0, 0.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p2, color, normal: bottom_normal, barycentric: [0.0, 1.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p3, color, normal: bottom_normal, barycentric: [0.0, 0.0, 1.0] });
         }
 
         Mesh::new(memory_allocator, &vertices, None)
@@ -801,7 +828,7 @@ pub mod shapes {
         // Tip of cone
         let tip = [0.0, 0.0, half_height];
 
-        // Side faces (triangles)
+        // Side faces (triangles) - normals are perpendicular to the cone surface
         for i in 0..sectors {
             let current_idx = i as usize;
             let next_i = ((i + 1) % sectors) as usize;
@@ -809,10 +836,16 @@ pub mod shapes {
             let p2 = [circle_points[current_idx][0], circle_points[current_idx][1], -half_height];
             let p3 = [circle_points[next_i][0], circle_points[next_i][1], -half_height];
 
-            add_triangle(&mut vertices, p1, p2, p3, color);
+            // Calculate normal for side face
+            let side_normal = calculate_normal(p1, p2, p3);
+            
+            vertices.push(VertexPosColorNormal { position: p1, color, normal: side_normal, barycentric: [1.0, 0.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p2, color, normal: side_normal, barycentric: [0.0, 1.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p3, color, normal: side_normal, barycentric: [0.0, 0.0, 1.0] });
         }
 
-        // Bottom cap (triangles from center)
+        // Bottom cap (triangles from center) - normal points down (-Y)
+        let bottom_normal = [0.0, 0.0, -1.0];
         for i in 0..sectors {
             let current_idx = i as usize;
             let next_i = ((i + 1) % sectors) as usize;
@@ -820,7 +853,9 @@ pub mod shapes {
             let p2 = [circle_points[current_idx][0], circle_points[current_idx][1], -half_height];
             let p3 = [circle_points[next_i][0], circle_points[next_i][1], -half_height];
 
-            add_triangle(&mut vertices, p1, p2, p3, color);
+            vertices.push(VertexPosColorNormal { position: p1, color, normal: bottom_normal, barycentric: [1.0, 0.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p2, color, normal: bottom_normal, barycentric: [0.0, 1.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: p3, color, normal: bottom_normal, barycentric: [0.0, 0.0, 1.0] });
         }
 
         Mesh::new(memory_allocator, &vertices, None)
@@ -841,20 +876,22 @@ pub mod shapes {
         let v2 = [w, h, 0.0];
         let v3 = [-w, h, 0.0];
 
+        // Plane normal points up (+Z)
+        let normal = [0.0, 0.0, 1.0];
+
         let vertices = vec![
-            VertexPosColor { position: v0, color, barycentric: [1.0, 0.0, 0.0] },
-            VertexPosColor { position: v1, color, barycentric: [0.0, 1.0, 0.0] },
-            VertexPosColor { position: v2, color, barycentric: [0.0, 0.0, 1.0] },
-            VertexPosColor { position: v2, color, barycentric: [1.0, 0.0, 0.0] },
-            VertexPosColor { position: v3, color, barycentric: [0.0, 1.0, 0.0] },
-            VertexPosColor { position: v0, color, barycentric: [0.0, 0.0, 1.0] },
+            VertexPosColorNormal { position: v0, color, normal, barycentric: [1.0, 0.0, 0.0] },
+            VertexPosColorNormal { position: v1, color, normal, barycentric: [0.0, 1.0, 0.0] },
+            VertexPosColorNormal { position: v2, color, normal, barycentric: [0.0, 0.0, 1.0] },
+            VertexPosColorNormal { position: v2, color, normal, barycentric: [1.0, 0.0, 0.0] },
+            VertexPosColorNormal { position: v3, color, normal, barycentric: [0.0, 1.0, 0.0] },
+            VertexPosColorNormal { position: v0, color, normal, barycentric: [0.0, 0.0, 1.0] },
         ];
 
         Mesh::new(memory_allocator, &vertices, None)
     }
 
     // * Create a grid of lines (useful for debugging/visualization)
-    // Now its looks shit, but I will make it cool, dont worry
     pub fn create_grid(
         memory_allocator: &Arc<StandardMemoryAllocator>,
         color: [f32; 3],
@@ -865,18 +902,21 @@ pub mod shapes {
         let step = size / divisions as f32;
         let half = size / 2.0;
 
+        // For lines, normals don't matter much, but we'll set them to zero
+        let normal = [0.0, 0.0, 0.0];
+
         // Lines along X axis
         for i in 0..=divisions {
             let x = -half + i as f32 * step;
-            vertices.push(VertexPosColor { position: [x, -half, 0.0], color, barycentric: [1.0, 0.0, 0.0] });
-            vertices.push(VertexPosColor { position: [x, half, 0.0], color, barycentric: [0.0, 1.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: [x, -half, 0.0], color, normal, barycentric: [1.0, 0.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: [x, half, 0.0], color, normal, barycentric: [0.0, 1.0, 0.0] });
         }
 
         // Lines along Y axis
         for i in 0..=divisions {
             let y = -half + i as f32 * step;
-            vertices.push(VertexPosColor { position: [-half, y, 0.0], color, barycentric: [0.0, 0.0, 1.0] });
-            vertices.push(VertexPosColor { position: [half, y, 0.0], color, barycentric: [1.0, 0.0, 0.0] });
+            vertices.push(VertexPosColorNormal { position: [-half, y, 0.0], color, normal, barycentric: [0.0, 0.0, 1.0] });
+            vertices.push(VertexPosColorNormal { position: [half, y, 0.0], color, normal, barycentric: [1.0, 0.0, 0.0] });
         }
 
         Mesh::new(memory_allocator, &vertices, None)
@@ -899,18 +939,45 @@ pub mod shapes {
         let b3 = [half, half, -half_height];
         let b4 = [-half, half, -half_height];
         
-        // Apex, like a game
+        // Apex, like a game, haha, ha?
         let apex = [0.0, 0.0, half_height];
 
-        // Base (two triangles)
-        add_triangle(&mut vertices, b1, b2, b3, color);
-        add_triangle(&mut vertices, b3, b4, b1, color);
+        // Base (two triangles) - normal points down (-Z)
+        let base_normal = [0.0, 0.0, -1.0];
+        
+        vertices.push(VertexPosColorNormal { position: b1, color, normal: base_normal, barycentric: [1.0, 0.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b2, color, normal: base_normal, barycentric: [0.0, 1.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b3, color, normal: base_normal, barycentric: [0.0, 0.0, 1.0] });
+        
+        vertices.push(VertexPosColorNormal { position: b3, color, normal: base_normal, barycentric: [1.0, 0.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b4, color, normal: base_normal, barycentric: [0.0, 1.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b1, color, normal: base_normal, barycentric: [0.0, 0.0, 1.0] });
 
-        // Four sides
-        add_triangle(&mut vertices, apex, b1, b2, color);
-        add_triangle(&mut vertices, apex, b2, b3, color);
-        add_triangle(&mut vertices, apex, b3, b4, color);
-        add_triangle(&mut vertices, apex, b4, b1, color);
+        // Four sides - calculate normals for each face
+        let side1_normal = calculate_normal(apex, b1, b2);
+        let side2_normal = calculate_normal(apex, b2, b3);
+        let side3_normal = calculate_normal(apex, b3, b4);
+        let side4_normal = calculate_normal(apex, b4, b1);
+
+        // Side 1
+        vertices.push(VertexPosColorNormal { position: apex, color, normal: side1_normal, barycentric: [1.0, 0.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b1, color, normal: side1_normal, barycentric: [0.0, 1.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b2, color, normal: side1_normal, barycentric: [0.0, 0.0, 1.0] });
+
+        // Side 2
+        vertices.push(VertexPosColorNormal { position: apex, color, normal: side2_normal, barycentric: [1.0, 0.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b2, color, normal: side2_normal, barycentric: [0.0, 1.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b3, color, normal: side2_normal, barycentric: [0.0, 0.0, 1.0] });
+
+        // Side 3
+        vertices.push(VertexPosColorNormal { position: apex, color, normal: side3_normal, barycentric: [1.0, 0.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b3, color, normal: side3_normal, barycentric: [0.0, 1.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b4, color, normal: side3_normal, barycentric: [0.0, 0.0, 1.0] });
+
+        // Side 4
+        vertices.push(VertexPosColorNormal { position: apex, color, normal: side4_normal, barycentric: [1.0, 0.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b4, color, normal: side4_normal, barycentric: [0.0, 1.0, 0.0] });
+        vertices.push(VertexPosColorNormal { position: b1, color, normal: side4_normal, barycentric: [0.0, 0.0, 1.0] });
 
         Mesh::new(memory_allocator, &vertices, None)
     }

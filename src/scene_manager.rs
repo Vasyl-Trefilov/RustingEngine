@@ -24,6 +24,7 @@ use crate::UniformBufferObject;
 use vulkano::descriptor_set::PersistentDescriptorSet;
 use vulkano::descriptor_set::WriteDescriptorSet;
 use vulkano::memory::allocator::MemoryUsage;
+use rayon::prelude::*; 
 
 pub struct RenderScene {
     batches: Vec<RenderBatch>,
@@ -43,7 +44,7 @@ impl RenderScene {
         // println!("Adding instance at position: {:?}", instance.transform.position);
         
         for batch in &mut self.batches {
-            if batch.mesh.vertex_count == mesh.vertex_count {
+            if batch.mesh.vertices.buffer() == mesh.vertices.buffer() {
                 batch.instances.push(instance);
                 // println!("Added to existing batch, total instances: {}", batch.instances.len());
                 return;
@@ -129,30 +130,26 @@ impl RenderScene {
         // let y_limit = world_h * margin;
 
         for batch in &mut self.batches {
-            for inst in &mut batch.instances {
-                
+            batch.instances.par_iter_mut().for_each(|inst| {
                 match &inst.animation {
                     AnimationType::Custom(logic) => {
-                        // This is where you and I will make cool custom animations like in THREE.js
                         logic(&mut inst.transform, &mut inst.velocity, &mut inst.original_position, elapsed);
                     }
                     AnimationType::Rotate => {
-                        inst.transform.rotation[0] += 0.005;
-                        inst.transform.rotation[1] += 0.008;
+                        inst.transform.rotation[0] = elapsed * 0.2;
+                        inst.transform.rotation[1] = elapsed * 0.2;
                     }
-                    AnimationType::Pulse => {
-                        let s = 1.0 + (elapsed * 2.0).sin() * 0.2;
-                        inst.transform.uniform_scale(s);
-                    }
-                    AnimationType::Static => {}
+                    _ => {}
                 }
 
-                // Apply Physics
-                // ? I think I will add a physics engine in my engine, aaa, I cant wait
+                // Physics update, now its little, but I will make it bigger
                 // inst.transform.position[0] += inst.velocity[0];
                 // inst.transform.position[1] += inst.velocity[1];
                 // inst.transform.position[2] += inst.velocity[2];
-            }
+                
+                // Calculate the matrix here so Render just a copy, its like +33% performance boost, I cheked
+                inst.model_matrix = inst.transform.to_matrix(); 
+            });
         }
     }
 
@@ -179,16 +176,14 @@ impl RenderScene {
             ubo_data.view = view;
             ubo_data.proj = proj;
         }
-        // 1. Map the buffer and write data
+        // Map the buffer and write data
         {
             let mut data = frame.instance_buffer.write().unwrap();
             let mut current_instance = 0;
             
             for batch in &self.batches {
                 for inst in &batch.instances {
-                    data[current_instance] = InstanceData {
-                        model: inst.transform.to_matrix(),
-                    };
+                    data[current_instance] = InstanceData { model: inst.model_matrix, color: inst.color, padding: 0.0, };
                     current_instance += 1;
                 }
             }
