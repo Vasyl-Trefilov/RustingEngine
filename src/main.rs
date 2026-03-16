@@ -61,7 +61,7 @@ use vulkano::pipeline::graphics::vertex_input::{
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::Instant;
-
+use winit::window::CursorGrabMode;
 
 mod shapes;
 use shapes::{VertexPosColorNormal, Mesh, Transform};
@@ -83,9 +83,12 @@ struct Camera {
 
 struct InputState {
     keys_pressed: std::collections::HashSet<winit::event::VirtualKeyCode>,
+    mouse_delta: [f32; 2],  
+    mouse_captured: bool,     
+    last_mouse_pos: [f32; 2],
     is_mouse_dragging: bool,
-    last_mouse_pos: (f32, f32),
 }
+
 
 // ! MOUSE 
 #[derive(Clone, Copy, Debug)]
@@ -370,7 +373,6 @@ mod vs {
         void main() {
             mat4 instance_model = mat4(model_row0, model_row1, model_row2, model_row3);
             
-            // calculating world position
             vec4 world_pos = instance_model * vec4(position, 1.0);
             
             gl_Position = ubo.proj * ubo.view * world_pos;
@@ -411,8 +413,8 @@ mod fs {
                 float roughness = v_mat_data.z;
                 float metalness = v_mat_data.w;
 
-                vec3 light_pos = vec3(0.0, 100.0, 0.0); // A light in the sky, like a sun, I will add custom light later(sun, pointerLight and areaLight)
-                vec3 light_color = vec3(10.0, 10.0, 10.0);
+                vec3 light_pos = vec3(20.0, 20.0, 20.0); // A light in the sky, like a sun, I will add custom light later(sun, pointerLight and areaLight)
+                vec3 light_color = vec3(1.0, 1.0, 1.0);
 
                 vec3 norm = normalize(v_normal);
                 vec3 light_dir = normalize(light_pos - v_pos);
@@ -711,7 +713,35 @@ fn main() {
 
 
     // ! A SCENE, now I will start render with scene, its already very solid, I want to make it more easy for people
-    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 1000);
+    let scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 1000);
+    let mut sprint = 1.0;
+    let speed = 0.01;
+
+    let mut camera = Camera {
+        position: [0.0, 0.0, 10.0],
+        yaw: -90.0f32.to_radians(), 
+        pitch: 0.0,
+    };
+
+    let mut inputs = InputState {
+        keys_pressed: std::collections::HashSet::new(),
+        mouse_delta: [0.0, 0.0],
+        mouse_captured: false,  // Use this one
+        last_mouse_pos: [0.0, 0.0],
+        is_mouse_dragging: false
+    };
+
+    let mut mouse_captured = false;
+
+    fn set_mouse_capture(window: &winit::window::Window, captured: bool) {
+        if captured {
+            let _ = window.set_cursor_grab(CursorGrabMode::Locked);
+            window.set_cursor_visible(false);
+        } else {
+            let _ = window.set_cursor_grab(CursorGrabMode::None);
+            window.set_cursor_visible(true);
+        }
+    }
 
     let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
     let tetra_mesh = create_tetrahedron(&memory_allocator, [1.0, 0.0, 0.0]); 
@@ -728,137 +758,116 @@ fn main() {
         transform.position[0] = elapsed.sin();
     }));
 
-    let mut camera = Camera {
-        position: [0.0, 0.0, -300.0],
-        yaw: 90.0f32.to_radians(), 
-        pitch: 0.0,
-    };
-
-    let mut inputs = InputState {
-        keys_pressed: std::collections::HashSet::new(),
-        is_mouse_dragging: false,
-        last_mouse_pos: (0.0, 0.0),
-    };
 
     let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 100000);   
 
     // * Materials testing, I am so close to THREE.js and so far in same time
 
-    // scene.add_instance(
-    //     sphere_sub_mesh.clone(), 
-    //     Instance {
-    //         transform: Transform { 
-    //             position: [-4.0, 0.0, 0.0], 
-    //             ..Default::default() 
-    //         },
-    //         color: [0.95, 0.6, 0.35],        
-    //         shininess: 400.0,                 
-    //         specular_strength: 1.0,          
-    //         roughness: 0.05,                  
-    //         metalness: 1.0,                  
-    //         ..Default::default()
-    //     }
-    // );
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { 
+                position: [-4.0, 0.0, 0.0], 
+                ..Default::default() 
+            },
+            color: [0.95, 0.6, 0.35],        
+            shininess: 400.0,                 
+            specular_strength: 1.0,          
+            roughness: 0.05,                  
+            metalness: 1.0,                  
+            ..Default::default()
+        }
+    );
 
-    // scene.add_instance(
-    //     sphere_sub_mesh.clone(), 
-    //     Instance {
-    //         transform: Transform { 
-    //             position: [-1.3, 0.0, 0.0], 
-    //             ..Default::default() 
-    //         },
-    //         color: [0.75, 0.75, 0.78],        
-    //         shininess: 150.0,                  
-    //         specular_strength: 0.9,          
-    //         roughness: 0.25,                    
-    //         metalness: 1.0,                   
-    //         ..Default::default()
-    //     }
-    // );
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { 
+                position: [-1.3, 0.0, 0.0], 
+                ..Default::default() 
+            },
+            color: [0.75, 0.75, 0.78],        
+            shininess: 150.0,                  
+            specular_strength: 0.9,          
+            roughness: 0.25,                    
+            metalness: 1.0,                   
+            ..Default::default()
+        }
+    );
 
-    // scene.add_instance(
-    //     sphere_sub_mesh.clone(), 
-    //     Instance {
-    //         transform: Transform { 
-    //             position: [1.3, 0.0, 0.0], 
-    //             ..Default::default() 
-    //         },
-    //         color: [1.0, 0.85, 0.4],           
-    //         shininess: 250.0,                   
-    //         specular_strength: 0.95,            
-    //         roughness: 0.15,                   
-    //         metalness: 0.95,                     
-    //         ..Default::default()
-    //     }
-    // );
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { 
+                position: [1.3, 0.0, 0.0], 
+                ..Default::default() 
+            },
+            color: [1.0, 0.85, 0.4],           
+            shininess: 250.0,                   
+            specular_strength: 0.95,            
+            roughness: 0.15,                   
+            metalness: 0.95,                     
+            ..Default::default()
+        }
+    );
 
-    // scene.add_instance(
-    //     sphere_sub_mesh.clone(), 
-    //     Instance {
-    //         transform: Transform { 
-    //             position: [4.0, 0.0, 0.0], 
-    //             ..Default::default() 
-    //         },
-    //         color: [0.9, 0.92, 0.95],          
-    //         shininess: 1000.0,                  
-    //         specular_strength: 1.0,             
-    //         roughness: 0.0,                       
-    //         metalness: 1.0,                      
-    //         ..Default::default()
-    //     }
-    // );
-
-    // scene.add_instance(create_wrong_cube(&memory_allocator, [1.0,0.0,0.0]), Instance {
-    //     transform: Transform {
-    //         position: [1.0, 0.0, 0.0],
-    //         ..Default::default()
-    //     },
-    //     animation: cube_rotate,
-    //     color: [1.0,0.0,0.0],
-    //     ..Default::default()
-    // });
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { 
+                position: [4.0, 0.0, 0.0], 
+                ..Default::default() 
+            },
+            color: [0.9, 0.92, 0.95],          
+            shininess: 1000.0,                  
+            specular_strength: 1.0,             
+            roughness: 0.0,                       
+            metalness: 1.0,                      
+            ..Default::default()
+        }
+    );
 
 
     // * Very cool star sphere
-    let stars_logic = AnimationType::Custom(Arc::new(|transform, _velocity, original_pos, elapsed| {
-        let speed = 0.1; 
-        let angle = elapsed * speed;
+    // let stars_logic = AnimationType::Custom(Arc::new(|transform, _velocity, original_pos, elapsed| {
+    //     let speed = 0.1; 
+    //     let angle = elapsed * speed;
         
-        let cos_a = angle.cos();
-        let sin_a = angle.sin();
+    //     let cos_a = angle.cos();
+    //     let sin_a = angle.sin();
 
-        transform.position[0] = original_pos[0] * cos_a - original_pos[2] * sin_a;
-        transform.position[2] = original_pos[0] * sin_a + original_pos[2] * cos_a;
+    //     transform.position[0] = original_pos[0] * cos_a - original_pos[2] * sin_a;
+    //     transform.position[2] = original_pos[0] * sin_a + original_pos[2] * cos_a;
         
-    }));
+    // }));
 
-    for _ in 0..10000 {
-        let radius = 100.0; 
+    // for _ in 0..100000 {
+    //     let radius = 100.0; 
         
-        let theta = rng.random_range(0.0..std::f32::consts::TAU);
-        let phi = rng.random_range(0.0..std::f32::consts::PI);
+    //     let theta = rng.random_range(0.0..std::f32::consts::TAU);
+    //     let phi = rng.random_range(0.0..std::f32::consts::PI);
         
-        let x = radius * phi.sin() * theta.cos();
-        let y = radius * phi.sin() * theta.sin();
-        let z = radius * phi.cos();
-        // let color = [rng.random_range(0.0..1.0),rng.random_range(0.0..1.0),rng.random_range(0.0..1.0)]; // This is easy and cool, but I am more dark/white guy(I mean, I like blackwhite style)
-        let color = [1.0,1.0,1.0];
-        scene.add_instance(
-            triangle.clone(),
-            Instance {
-                transform: Transform {
-                    position: [x, y, z],
-                    scale: [0.2, 0.2, 0.2],
-                    ..Default::default()
-                },
-                original_position: [x, y, z], 
-                animation: stars_logic.clone(),
-                velocity: [0.0, 0.0, 0.0],
-                color: color, 
-                ..Default::default()
-            }
-        );
-    }
+    //     let x = radius * phi.sin() * theta.cos();
+    //     let y = radius * phi.sin() * theta.sin();
+    //     let z = radius * phi.cos();
+    //     // let color = [rng.random_range(0.0..1.0),rng.random_range(0.0..1.0),rng.random_range(0.0..1.0)]; // This is easy and cool, but I am more dark/white guy(I mean, I like blackwhite style)
+    //     let color = [1.0,1.0,1.0];
+    //     scene.add_instance(
+    //         triangle.clone(),
+    //         Instance {
+    //             transform: Transform {
+    //                 position: [x, y, z],
+    //                 scale: [0.2, 0.2, 0.2],
+    //                 ..Default::default()
+    //             },
+    //             original_position: [x, y, z], 
+    //             animation: stars_logic.clone(),
+    //             velocity: [0.0, 0.0, 0.0],
+    //             color: color, 
+    //             ..Default::default()
+    //         }
+    //     );
+    // }
 
     // scene.add_instance(
     //     sphere_sub_mesh.clone(),
@@ -924,8 +933,6 @@ fn main() {
     let mut total_fps = 0;
     let mut mesh_index = 0; // * I use it to view each mesh, so if unused its okay.
     let mut dims: [u32; 2] = window.inner_size().into();
-    let mut sprint = 1.0;
-    let speed = 0.1;
     // if dims[0] == 0 || dims[1] == 0 { return; }  // Window minimized => skip rendering
     // ! MAIN RENDER LOOP - runs until the window is closed
     event_loop.run(move |event, _, control_flow| {
@@ -942,7 +949,18 @@ fn main() {
             Event::WindowEvent { event: WindowEvent::CursorLeft { .. }, .. } => {
                 mouse_state.inside_window = false;
             },
-            
+            Event::DeviceEvent {
+                event: winit::event::DeviceEvent::MouseMotion { delta },
+                ..
+            } => {
+                if inputs.mouse_captured {
+                    let sensitivity = 0.001;
+                    camera.yaw -= delta.0 as f32 * sensitivity;
+                    camera.pitch += delta.1 as f32 * sensitivity; 
+                    
+                    camera.pitch = camera.pitch.clamp(-1.5, 1.5);
+                }
+            },
             Event::WindowEvent { event: WindowEvent::CursorEntered { .. }, .. } => {
                 mouse_state.inside_window = true;
             },
@@ -950,6 +968,10 @@ fn main() {
                 WindowEvent::KeyboardInput { input, .. } => {
                     if let Some(code) = input.virtual_keycode {
                         if input.state == winit::event::ElementState::Pressed {
+                            if code == winit::event::VirtualKeyCode::Escape {
+                                inputs.mouse_captured = !inputs.mouse_captured;
+                                set_mouse_capture(&window, inputs.mouse_captured);
+                            }
                             if code == winit::event::VirtualKeyCode::LShift {
                                 sprint = 2.0;
                             }
@@ -968,16 +990,18 @@ fn main() {
                     }
                 },
                 WindowEvent::CursorMoved { position, .. } => {
-                    let dx = position.x as f32 - inputs.last_mouse_pos.0;
-                    let dy = position.y as f32 - inputs.last_mouse_pos.1;
-                    inputs.last_mouse_pos = (position.x as f32, position.y as f32);
+                    if !inputs.mouse_captured {
+                        let dx = position.x as f32 - inputs.last_mouse_pos[0];
+                        let dy = position.y as f32 - inputs.last_mouse_pos[1];
+                        inputs.last_mouse_pos = [position.x as f32, position.y as f32];
 
-                    if inputs.is_mouse_dragging {
-                        let sensitivity = 0.001;
-                        camera.yaw += dx * sensitivity;
-                        camera.pitch += dy * sensitivity;
-                        camera.pitch = camera.pitch.clamp(-1.5, 1.5);
-                    }
+                        if inputs.is_mouse_dragging {
+                            let sensitivity = 0.001;
+                            camera.yaw += dx * sensitivity;
+                            camera.pitch += dy * sensitivity;
+                            camera.pitch = camera.pitch.clamp(-1.5, 1.5);
+                        }
+                    } 
                 },
                 _ => ()
             },
@@ -1037,55 +1061,91 @@ fn main() {
                 // * Clean up finished GPU commands
                 previous_frame_end.as_mut().unwrap().cleanup_finished();
 
-                // ! Camera change
 
-                let yaw_rad = camera.yaw;
-                let pitch_rad = camera.pitch;
+                // * move selection, now here you can see a lot of variables, that can be placed out of loop, but I do like that to fast debug
+                // * fucking math, I am so tired of that, but it still better and more interesting as useless school math
+
+                let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
+                let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
 
                 let forward = [
-                    yaw_rad.cos() * pitch_rad.cos(),
-                    pitch_rad.sin(),
-                    yaw_rad.sin() * pitch_rad.cos(),
+                    yaw_cos * pitch_cos,
+                    pitch_sin,
+                    yaw_sin * pitch_cos
                 ];
 
+                let right = [
+                    yaw_sin, 
+                    0.0,
+                    -yaw_cos
+                ];
                 let world_up = [0.0, 1.0, 0.0];
-                let right = {
-                    let v = [
-                        forward[1] * world_up[2] - forward[2] * world_up[1],
-                        forward[2] * world_up[0] - forward[0] * world_up[2],
-                        forward[0] * world_up[1] - forward[1] * world_up[0],
+                if inputs.mouse_captured {
+                    
+                    let speed_mult = speed * sprint;
+
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::W) {
+                        for i in 0..3 { camera.position[i] += forward[i] * speed_mult; }
+                    }
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::S) {
+                        for i in 0..3 { camera.position[i] -= forward[i] * speed_mult; }
+                    }
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::A) {
+                        for i in 0..3 { camera.position[i] -= right[i] * speed_mult; } 
+                    }
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::D) {
+                        for i in 0..3 { camera.position[i] += right[i] * speed_mult; } 
+                    }
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::Space) {
+                        camera.position[1] += speed_mult;
+                    }
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::LControl) {
+                        camera.position[1] -= speed_mult;
+                    }
+
+                    let target = [
+                        camera.position[0] - forward[0],
+                        camera.position[1] + forward[1],
+                        camera.position[2] - forward[2],
                     ];
-                    let len = (v[0]*v[0] + v[1]*v[1] + v[2]*v[2]).sqrt();
-                    [v[0]/len, v[1]/len, v[2]/len]
-                };
+                    
+                    view = create_look_at(camera.position, target, world_up);
+                } else {
+                    
+                    let speed_step = speed * sprint;
 
-                let speed_step = speed * sprint;
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::W) {
+                        camera.position[0] += forward[0] * speed_step;
+                        camera.position[1] += forward[1] * speed_step;
+                        camera.position[2] += forward[2] * speed_step;
+                    }
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::S) {
+                        camera.position[0] -= forward[0] * speed_step;
+                        camera.position[1] -= forward[1] * speed_step;
+                        camera.position[2] -= forward[2] * speed_step;
+                    }
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::A) {
+                        camera.position[0] -= right[0] * speed_step;
+                        camera.position[2] -= right[2] * speed_step;
+                    }
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::D) {
+                        camera.position[0] += right[0] * speed_step;
+                        camera.position[2] += right[2] * speed_step;
+                    }
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::Space) {
+                        camera.position[1] += speed_step;
+                    }
+                    if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::LControl) {
+                        camera.position[1] -= speed_step;
+                    }
+                    let target = [
+                        camera.position[0] - forward[0],
+                        camera.position[1] - forward[1],
+                        camera.position[2] - forward[2],
+                    ];
+                    view = create_look_at(camera.position, target, [0.0, 1.0, 0.0]);
+                }
 
-                if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::W) {
-                    camera.position[0] += forward[0] * speed_step;
-                    camera.position[1] += forward[1] * speed_step;
-                    camera.position[2] += forward[2] * speed_step;
-                }
-                if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::S) {
-                    camera.position[0] -= forward[0] * speed_step;
-                    camera.position[1] -= forward[1] * speed_step;
-                    camera.position[2] -= forward[2] * speed_step;
-                }
-                if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::A) {
-                    camera.position[0] += right[0] * speed_step;
-                    camera.position[2] += right[2] * speed_step;
-                }
-                if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::D) {
-                    camera.position[0] -= right[0] * speed_step;
-                    camera.position[2] -= right[2] * speed_step;
-                }
-
-                let target = [
-                    camera.position[0] - forward[0],
-                    camera.position[1] - forward[1],
-                    camera.position[2] - forward[2],
-                ];
-                view = create_look_at(camera.position, target, [0.0, 1.0, 0.0]);
                 eye_pos = camera.position;
 
                 // ! ACQUIRE NEXT IMAGE from swapchain to draw on
