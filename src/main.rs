@@ -63,9 +63,9 @@ use std::io::Write;
 use std::time::Instant;
 use winit::window::CursorGrabMode;
 
-mod shapes;
-use shapes::{VertexPosColorNormal, Mesh, Transform};
-use shapes::shapes::{
+mod shapesOld;
+use shapesOld::{VertexPosColorNormal, Mesh, Transform};
+use shapesOld::shapes::{
     create_cube, create_sphere, create_plane,
     create_cone, create_cylinder, create_dodecahedron, 
     create_grid, create_icosahedron, create_octahedron, 
@@ -73,7 +73,7 @@ use shapes::shapes::{
     create_torus, // ! thats looks so sick, I am proud of myself, just a bit
 };
 
-use crate::shapes::shapes::{create_triangle, create_wrong_cube};
+use crate::shapesOld::shapes::{create_triangle, create_wrong_cube};
 
 struct Camera {
     position: [f32; 3],

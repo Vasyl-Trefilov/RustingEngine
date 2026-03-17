@@ -1,42 +1,31 @@
-// So, here we go, a start of my library, a Scene
-use crate::shapesOld::*;
-use crate::{RenderObject, create_render_object, constrain_to_screen};
-use vulkano::device::Device;
-use vulkano::memory::allocator::{MemoryAllocator, StandardMemoryAllocator};
-use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
-use vulkano::pipeline::GraphicsPipeline;
-use vulkano::command_buffer::AutoCommandBufferBuilder;
-use vulkano::command_buffer::PrimaryAutoCommandBuffer;
+pub mod animation;
+pub mod object;
+
 use std::sync::Arc;
-use crate::MouseState;
-use crate::AnimationType;
-use vulkano::pipeline::PipelineBindPoint;
-use vulkano::pipeline::Pipeline;
-use crate::{apply_mouse_repulsion, RenderBatch, Instance, InstanceData};
-use vulkano::buffer::Buffer;
-use vulkano::memory::allocator::GenericMemoryAllocator;
-use vulkano::memory::allocator::FreeListAllocator;
-use crate::BufferCreateInfo;
-use crate::BufferUsage;
-use crate::AllocationCreateInfo;
-use vulkano::buffer::Subbuffer;
-use crate::UniformBufferObject;
-use vulkano::descriptor_set::PersistentDescriptorSet;
-use vulkano::descriptor_set::WriteDescriptorSet;
-use vulkano::memory::allocator::MemoryUsage;
-use rayon::prelude::*; 
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
+use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator};
+use vulkano::memory::allocator::{StandardMemoryAllocator, MemoryUsage, AllocationCreateInfo};
+use vulkano::pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint};
+use rayon::prelude::*;
+
+use crate::scene::object::{RenderBatch, Instance, InstanceData};
+use crate::scene::animation::AnimationType;
+use crate::renderer::pipeline::UniformBufferObject;
+use crate::shapes::Mesh;
+use crate::input::MouseState;
 
 pub struct RenderScene {
-    batches: Vec<RenderBatch>,
-    frames: Vec<FrameData>,
+    pub batches: Vec<RenderBatch>,
+    pub frames: Vec<FrameData>,
 }
 
-// I use FrameData, to avoid GPU and CPU conflict
-struct FrameData {
+pub struct FrameData {
     pub instance_buffer: Subbuffer<[InstanceData]>,
     pub uniform_buffer: Subbuffer<UniformBufferObject>,
     pub descriptor_set: Arc<PersistentDescriptorSet>,
 }
+
 
 impl RenderScene {
 
