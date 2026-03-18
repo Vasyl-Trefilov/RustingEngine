@@ -1,3 +1,5 @@
+use crate::input::InputState;
+
 pub struct Camera {
     pub position: [f32; 3],
     pub yaw: f32,
@@ -48,4 +50,87 @@ pub fn create_projection_matrix(aspect: f32, fov: f32, z_near: f32, z_far: f32) 
         [0.0, 0.0, z_far / (z_far - z_near), 1.0],
         [0.0, 0.0, -(z_far * z_near) / (z_far - z_near), 0.0],
     ]
+}
+
+pub fn camera_rotate(camera: &mut Camera, inputs: &InputState) -> [[f32; 4]; 4] {
+    let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
+    let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
+
+    let forward = [
+        yaw_cos * pitch_cos,
+        pitch_sin,
+        yaw_sin * pitch_cos
+    ];
+
+    let right = [
+        yaw_sin, 
+        0.0,
+        -yaw_cos
+    ];
+    let world_up = [0.0, 1.0, 0.0];
+    if inputs.mouse_captured {
+        
+        let speed_mult = inputs.speed * inputs.sprint;
+
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::W) {
+            for i in 0..3 { camera.position[i] += forward[i] * speed_mult; }
+        }
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::S) {
+            for i in 0..3 { camera.position[i] -= forward[i] * speed_mult; }
+        }
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::A) {
+            for i in 0..3 { camera.position[i] -= right[i] * speed_mult; } 
+        }
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::D) {
+            for i in 0..3 { camera.position[i] += right[i] * speed_mult; } 
+        }
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::Space) {
+            camera.position[1] += speed_mult;
+        }
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::LControl) {
+            camera.position[1] -= speed_mult;
+        }
+
+        let target = [
+            camera.position[0] - forward[0],
+            camera.position[1] + forward[1],
+            camera.position[2] - forward[2],
+        ];
+        
+        create_look_at(camera.position, target, world_up)
+    } else {
+        
+        let speed_step = inputs.speed * inputs.sprint;
+
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::W) {
+            camera.position[0] += forward[0] * speed_step;
+            camera.position[1] += forward[1] * speed_step;
+            camera.position[2] += forward[2] * speed_step;
+        }
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::S) {
+            camera.position[0] -= forward[0] * speed_step;
+            camera.position[1] -= forward[1] * speed_step;
+            camera.position[2] -= forward[2] * speed_step;
+        }
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::A) {
+            camera.position[0] -= right[0] * speed_step;
+            camera.position[2] -= right[2] * speed_step;
+        }
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::D) {
+            camera.position[0] += right[0] * speed_step;
+            camera.position[2] += right[2] * speed_step;
+        }
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::Space) {
+            camera.position[1] += speed_step;
+        }
+        if inputs.keys_pressed.contains(&winit::event::VirtualKeyCode::LControl) {
+            camera.position[1] -= speed_step;
+        }
+        let target = [
+            camera.position[0] - forward[0],
+            camera.position[1] - forward[1],
+            camera.position[2] - forward[2],
+        ];
+        create_look_at(camera.position, target, [0.0, 1.0, 0.0])
+    }
 }

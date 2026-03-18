@@ -1,5 +1,3 @@
-
-
 pub mod vs {
     vulkano_shaders::shader! {
         ty: "vertex",

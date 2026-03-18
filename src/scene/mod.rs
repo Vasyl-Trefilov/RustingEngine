@@ -26,7 +26,6 @@ pub struct FrameData {
     pub descriptor_set: Arc<PersistentDescriptorSet>,
 }
 
-
 impl RenderScene {
 
     pub fn add_instance(&mut self, mesh: Mesh, instance: Instance) {

@@ -1,6 +1,7 @@
 pub mod camera;
 pub mod pipeline;
 pub mod swapchain;
+pub mod render;
 
 use std::sync::Arc;
 use vulkano::device::physical::PhysicalDeviceType;
@@ -12,6 +13,7 @@ use vulkano_win::VkSurfaceBuild;
 use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowBuilder};
 
+#[derive(Clone)]
 pub struct VulkanBase {
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,

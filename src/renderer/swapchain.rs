@@ -32,9 +32,34 @@ pub fn create_swapchain_and_images(
     ).unwrap()
 }
 
+pub fn create_render_pass(device: Arc<Device>, swapchain: &Arc<Swapchain>) -> std::sync::Arc<RenderPass> {
+    vulkano::ordered_passes_renderpass!(
+        device.clone(),
+        attachments: {
+            color: {  // Color attachment (the final image)
+                load: Clear,      // Clear to a color at start
+                store: Store,     // Save the result
+                format: swapchain.image_format(),
+                samples: 1,       // No multisampling
+            },
+            depth: {  // Depth attachment (for 3D sorting)
+                load: Clear,      // Clear to max depth
+                store: DontCare,  // Don't need to save depth buffer
+                format: vulkano::format::Format::D16_UNORM,
+                samples: 1,
+            }
+        },
+        passes: [ {
+            color: [color],        // Use color attachment
+            depth_stencil: {depth}, // Use depth attachment
+            input: []               // No input attachments
+        } ],
+    ).unwrap()
+}
+
 pub fn create_framebuffers(
     images: &[Arc<SwapchainImage>],
-    render_pass: Arc<RenderPass>,
+    render_pass: &Arc<RenderPass>,
     memory_allocator: &StandardMemoryAllocator,
 ) -> Vec<Arc<Framebuffer>> {
     let dims = images[0].dimensions().width_height();
