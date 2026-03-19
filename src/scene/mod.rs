@@ -18,6 +18,9 @@ use crate::input::MouseState;
 pub struct RenderScene {
     pub batches: Vec<RenderBatch>,
     pub frames: Vec<FrameData>,
+    pub light_pos: [f32; 3],
+    pub light_color: [f32; 3],
+    pub light_intensity: f32,
 }
 
 pub struct FrameData {
@@ -98,6 +101,9 @@ impl RenderScene {
         Self {
             batches: Vec::new(),
             frames,
+            light_pos: [0.0, 10.0, 0.0], 
+            light_color: [1.0, 1.0, 1.0],
+            light_intensity: 50.0,
         }
     }
 
@@ -121,7 +127,7 @@ impl RenderScene {
             batch.instances.par_iter_mut().for_each(|inst| {
                 match &inst.animation {
                     AnimationType::Custom(logic) => {
-                        logic(&mut inst.transform, &mut inst.velocity, &mut inst.original_position, elapsed);
+                        logic(&mut inst.transform, &mut inst.velocity, &mut inst.original_position, &mut inst.color, elapsed);
                     }
                     AnimationType::Rotate => {
                         inst.transform.rotation[0] = elapsed * 0.2;
@@ -165,6 +171,10 @@ impl RenderScene {
             ubo_data.view = view;
             ubo_data.proj = proj;
             ubo_data.eye_pos = eye_pos;
+            
+            ubo_data.light_pos = self.light_pos;
+            ubo_data.light_color = self.light_color;
+            ubo_data.light_intensity = self.light_intensity;
         }
         // Map the buffer and write data
         {
@@ -226,5 +236,11 @@ impl RenderScene {
             
             current_instance_offset += batch.instances.len();
         }
+    }
+
+    pub fn set_light(&mut self, position: [f32; 3], color: [f32; 3], intensity: f32) {
+        self.light_pos = position;
+        self.light_color = color;
+        self.light_intensity = intensity;
     }
 }

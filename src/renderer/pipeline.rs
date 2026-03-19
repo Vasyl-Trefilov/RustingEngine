@@ -10,39 +10,30 @@ use vulkano::pipeline::GraphicsPipeline;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct UniformBufferObject {
-    pub view: [[f32; 4]; 4],
-    pub proj: [[f32; 4]; 4],
-    pub eye_pos: [f32; 3]
+    pub view: [[f32; 4]; 4],       // 64 bytes
+    pub proj: [[f32; 4]; 4],       // 64 bytes
+    pub eye_pos: [f32; 3],         // 12 bytes
+    pub padding_1: f32,            // 4 bytes 
+    pub light_pos: [f32; 3],       // 12 bytes
+    pub padding_2: f32,            // 4 bytes 
+    pub light_color: [f32; 3],     // 12 bytes
+    pub light_intensity: f32,      // 4 bytes
 }
 
 impl Default for UniformBufferObject {
     fn default() -> Self {
-        let aspect = 16.0 / 9.0;
-        let fov = 45.0f32.to_radians();
-        let f = 1.0 / (fov / 2.0).tan();
-        let z_near = 0.1;
-        let z_far = 500.0;
-        
         Self {
-            view: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 5.0, 1.0],
-            ],
-            proj: [
-                [f / aspect, 0.0, 0.0, 0.0],
-                [0.0, f, 0.0, 0.0],
-                [0.0, 0.0, (z_far + z_near) / (z_far - z_near), 1.0],
-                [0.0, 0.0, -(2.0 * z_far * z_near) / (z_far - z_near), 0.0],
-            ],
-            eye_pos: [
-                0.0, 0.0, 5.0
-            ]
+            view: [[0.0; 4]; 4],
+            proj: [[0.0; 4]; 4],
+            eye_pos: [0.0; 3],
+            padding_1: 0.0,
+            light_pos: [0.0, 10.0, 0.0],
+            padding_2: 0.0,
+            light_color: [1.0, 1.0, 1.0],
+            light_intensity: 50.0,
         }
     }
 }
-
 pub fn create_vertex_input_state() -> VertexInputState {
     VertexInputState::new()
     .binding(0, VertexInputBindingDescription {

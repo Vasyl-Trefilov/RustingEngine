@@ -3,6 +3,7 @@ mod scene;
 mod input;
 mod shaders;
 mod shapes;
+mod effects;
 
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
@@ -15,7 +16,7 @@ use vulkano::image::ImageUsage;
 use vulkano::swapchain::PresentMode;
 use crate::scene::animation::AnimationType;
 use std::sync::Arc;
-use crate::renderer::swapchain::{create_framebuffers, create_render_pass};
+use crate::renderer::swapchain::{create_framebuffers, create_render_pass, create_swapchain_and_images};
 use crate::shapes::VertexPosColorNormal;
  
 use std::{panic};
@@ -23,7 +24,6 @@ use rand::*;
 use crate::renderer::camera::{Camera, camera_rotate, create_look_at, create_projection_matrix};
 use crate::scene::RenderScene;
 use crate::input::{InputState, MouseState, set_mouse_capture};
-use crate::shapes::shapes::create_sphere_subdivided;
 use crate::scene::object::InstanceData;
 use crate::shaders::vs;
 use crate::shaders::fs;
@@ -32,7 +32,8 @@ use crate::scene::object::Transform;
 use crate::renderer::pipeline::create_pipeline;
 use crate::renderer::render::process_render;
 use crate::renderer::render::create_builder;
-use crate::shapes::shapes::create_triangle;
+use crate::shapes::shapes::{create_sphere_subdivided, create_triangle};
+use crate::effects::{RainSettings, SphereSettings, create_event_horizon, create_fire, create_fountain, create_monochrome_rain, create_nebula_sphere, create_void_fire};
 
 fn main() {
     let event_loop = EventLoop::new();
@@ -41,18 +42,17 @@ fn main() {
     let fov = 45.0f32.to_radians();  // Field of view in radians, its like a minecraft fov, if you know
     let z_near = 0.1;                 // Near clipping plane, it means, if some object is 0.1 from camera, it will not be shown
     let z_far = 500.0;                 // Far clipping plane, how far can 'camera' see, you can set like 1000 if you are not developing some AAA game, but if you do, I guess you know better then me what to do
-    let f = 1.0 / (fov / 2.0).tan();   // Focal length calculation, yes, just google it if you need
 
     // ! PROJECTION MATRIX - Converts 3D to 2D screen coordinates
     let mut proj: [[f32; 4]; 4] = create_projection_matrix(aspect, fov, z_near, z_far);
     // ! VIEW MATRIX - Camera position (currently looking from [0,0,5])
-    let mut view = [
+    let mut view: [[f32; 4]; 4] = [
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 350.0, 1.0], // * This third value is camera position, but remeber, in OpenGL and THREE.js we use -Z to go back, in Vulkan we use +Z, so Z=350 in vulkan is Z=-350 in THREE.js/OpenGL
+        [0.0, 0.0, 350.0, 1.0],
     ];
-    let mut eye_pos = [view[3][0],view[3][1],view[3][2]];
+    let mut eye_pos: [f32; 3] = [view[3][0],view[3][1],view[3][2]];
 
     // Initialize Vulkan Base
     let base = renderer::init_vulkan(&event_loop);
@@ -62,22 +62,7 @@ fn main() {
     let vs = vs::load(base.device.clone()).unwrap();
     let fs = fs::load(base.device.clone()).unwrap();
 
-    let (mut swapchain, images) = {
-        let caps = base.device.physical_device().surface_capabilities(&base.surface, Default::default()).unwrap();
-        let format = base.device.physical_device().surface_formats(&base.surface, Default::default()).unwrap()[0].0;
-        
-        let (sw, img) = Swapchain::new(base.device.clone(), base.surface.clone(), SwapchainCreateInfo {
-            min_image_count: caps.min_image_count,  // Minimum buffers for smooth rendering
-            image_format: Some(format),
-            image_extent: base.window.inner_size().into(),
-            image_usage: ImageUsage::COLOR_ATTACHMENT,  // We'll draw to these images
-            composite_alpha: caps.supported_composite_alpha.into_iter().next().unwrap(),
-            present_mode: PresentMode::Immediate,  // Show frames immediately (no vsync), can be used for benchmarking or just for fun
-            // present_mode: PresentMode::Fifo, // So, only Fifo is guaranteed to be supported on every device. And I think its better for some kind of prod, if I ever will get to this point, but for now, I want to see the maximum fps, so I will use Immediate, but if you want to use Fifo, its your choise
-            ..Default::default()
-        }).unwrap();
-        (sw, img)
-    };
+    let (mut swapchain, images) = create_swapchain_and_images(&base.device, &base.surface, &base.window);
 
     let render_pass = create_render_pass(base.device.clone(), &swapchain);
     // ! GRAPHICS PIPELINE - The complete configuration for drawing
@@ -89,74 +74,116 @@ fn main() {
 
     // * Inputs
     let mut mouse_state = MouseState::default();
-    let mut prev_mouse_state = MouseState::default();
-    let mut inputs = InputState::default();
+    // let mut prev_mouse_state = MouseState::default();
+    let mut inputs = InputState{speed: 0.01, ..Default::default()};
 
     // * Scene
-    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 100000);
-
-    let mut rng = rand::rng();
-
-    let stars_logic = AnimationType::Custom(Arc::new(|transform, _velocity, original_pos, elapsed| {
-        let speed = 0.1; 
-        let angle = elapsed * speed;
-        
-        let cos_a = angle.cos();
-        let sin_a = angle.sin();
-
-        transform.position[0] = original_pos[0] * cos_a - original_pos[2] * sin_a;
-        transform.position[2] = original_pos[0] * sin_a + original_pos[2] * cos_a;
-        
-    }));
-    let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
-    for _ in 0..100000 {
-        let radius = 100.0; 
-        
-        let theta = rng.random_range(0.0..std::f32::consts::TAU);
-        let phi = rng.random_range(0.0..std::f32::consts::PI);
-        
-        let x = radius * phi.sin() * theta.cos();
-        let y = radius * phi.sin() * theta.sin();
-        let z = radius * phi.cos();
-        // let color = [rng.random_range(0.0..1.0),rng.random_range(0.0..1.0),rng.random_range(0.0..1.0)]; // This is easy and cool, but I am more dark/white guy(I mean, I like blackwhite style)
-        let color = [1.0,1.0,1.0];
-        scene.add_instance(
-            triangle.clone(),
-            Instance {
-                transform: Transform {
-                    position: [x, y, z],
-                    scale: [0.2, 0.2, 0.2],
-                    ..Default::default()
-                },
-                original_position: [x, y, z], 
-                animation: stars_logic.clone(),
-                velocity: [0.0, 0.0, 0.0],
-                color: color, 
-                ..Default::default()
-            }
-        );
-    }
-    // scene.add_instance(
-    //     create_sphere_subdivided(&memory_allocator, [1.0,1.0,1.0], 2), 
-    //     Instance {
-    //         transform: Transform { 
-    //             position: [-4.0, 0.0, 0.0], 
-    //             ..Default::default() 
-    //         },
-    //         color: [0.95, 0.6, 0.35],        
-    //         shininess: 400.0,                 
-    //         specular_strength: 1.0,          
-    //         roughness: 0.05,                  
-    //         metalness: 1.0,                  
-    //         ..Default::default()
-    //     }
-    // );
-
+    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 1_000_000);
     let mut camera = Camera {
-        position: [0.0, 0.0, 350.0],
+        position: [0.0, 0.0, 10.0],
         yaw: -90.0f32.to_radians(),
         pitch: 0.0,
     };
+    scene.set_light([20.0, 20.0, 20.0], [1.0, 1.0, 1.0], 1000.0);
+    let mut rng = rand::rng();
+    let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
+
+
+    // create_star_sphere(&mut scene, triangle.clone(), 10000); // * this is the main performance check, just bc why not
+    // create_fountain(&mut scene, triangle.clone(), 500);
+    // create_fire(&mut scene, triangle.clone(), 4000, None);
+    // create_void_fire(&mut scene, triangle.clone(), 3000, None);
+    // create_nebula_sphere(&mut scene, triangle.clone(), 3000, None);
+    // create_event_horizon(&mut scene, triangle.clone(), 3000, Some(SphereSettings{center: [0.0,0.0,0.0], radius: 20.0, random_color: true, ..Default::default()}));
+    // create_monochrome_rain(&mut scene, triangle.clone(), 3000, Some(RainSettings{speed: 0.01, ..Default::default()}));
+    
+    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0,1.0,1.0], 3);
+    
+
+    // * So I dont want to lie, this spheres was created by gemini, bc why not? 
+    // 1. POLISHED COPPER (High Metalness + Low Roughness)
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { position: [-6.0, 0.0, 0.0], ..Default::default() },
+            color: [0.89, 0.47, 0.33],        
+            shininess: 50.0,                 // Medium-sharp highlight
+            specular_strength: 0.8,          // Strong reflection
+            roughness: 0.05,                 // Very smooth surface, mirror-like
+            metalness: 1.0,                  // 100% metal: light is tinted by the copper color
+            ..Default::default()
+        }
+    );
+
+    // 2. CHROME / MIRROR (Pure White + Zero Roughness + Extreme Shininess)
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { position: [-3.6, 0.0, 0.0], ..Default::default() },
+            color: [0.97, 0.97, 0.98],        
+            shininess: 1000.0,               // Reflection is a tiny, sharp pixel point
+            specular_strength: 1.0,          
+            roughness: 0.0,                  // Perfectly smooth
+            metalness: 1.0,                  // Reflects light source perfectly
+            ..Default::default()
+        }
+    );
+
+    // 3. 24K GOLD (Yellow Tint + High Shininess)
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { position: [-1.2, 0.0, 0.0], ..Default::default() },
+            color: [1.0, 0.85, 0.4],           
+            shininess: 400.0,                // Very sharp highlight
+            specular_strength: 0.9,            
+            roughness: 0.1,                  // Slight micro-scratches
+            metalness: 1.0,                  // Metal tints specular highlights to gold
+            ..Default::default()
+        }
+    );
+
+    // 4. MATTE PLASTIC (Zero Metalness + High Roughness)
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { position: [1.2, 0.0, 0.0], ..Default::default() },
+            color: [0.1, 0.4, 0.8],          
+            shininess: 5.0,                  // Very broad, dull highlight
+            specular_strength: 0.1,          // Weak reflection   
+            roughness: 0.8,                  // Rough surface scatters light (no shine)
+            metalness: 0.0,                  // Non-metal: uses standard diffuse lighting
+            ..Default::default()
+        }
+    );
+
+    // 5. GLOSSY CAR PAINT (Low Metalness + Very Low Roughness)
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { position: [3.6, 0.0, 0.0], ..Default::default() },
+            color: [0.8, 0.05, 0.05],          
+            shininess: 600.0,                // Sharp reflection "clear coat" look
+            specular_strength: 0.5,             
+            roughness: 0.02,                 // Very smooth finish
+            metalness: 0.0,                  // Non-metal: white highlights on red base
+            ..Default::default()
+        }
+    );
+
+    // 6. BRUSHED ALUMINUM (High Metalness + High Roughness)
+    scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { position: [6.0, 0.0, 0.0], ..Default::default() },
+            color: [0.4, 0.42, 0.45],          
+            shininess: 20.0,                 // Wide, spread-out highlight
+            specular_strength: 0.3,             
+            roughness: 0.7,                  // High roughness blurs the metallic reflection
+            metalness: 1.0,                  // Still metal, but "satin" or "brushed" finish
+            ..Default::default()
+        }
+    );
 
     let mut framebuffers = create_framebuffers(&images, &render_pass, &memory_allocator);
 
@@ -253,7 +280,6 @@ fn main() {
                     }
                 }
                 frame_index = (frame_index + 1) % 3;
-                // 1. Handle Swapchain recreation
                 if recreate_swapchain {
                     let new_size = base.window.inner_size(); 
                     dims = [new_size.width, new_size.height]; 
@@ -314,3 +340,4 @@ fn main() {
         }
     });
 }
+

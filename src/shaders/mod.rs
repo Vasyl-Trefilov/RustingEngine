@@ -51,38 +51,52 @@ pub mod fs {
             layout(set = 0, binding = 0) uniform UniformBufferObject {
                 mat4 view;
                 mat4 proj;
-                vec3 eye_pos; 
+                vec3 eye_pos;
+                vec3 light_pos;
+                vec3 light_color;   
+                float light_intensity;
             } ubo;
+
             layout(location = 0) out vec4 f_color;
 
             void main() {
-                float shininess = v_mat_data.x;
-                float spec_strength = v_mat_data.y;
-                float roughness = v_mat_data.z;
-                float metalness = v_mat_data.w;
+            float shininess = v_mat_data.x;
+            float spec_strength = v_mat_data.y;
+            float roughness = v_mat_data.z;
+            float metalness = v_mat_data.w;
 
-                vec3 light_pos = vec3(20.0, 20.0, 20.0);
-                vec3 light_color = vec3(1.0, 1.0, 1.0);
+            vec3 norm = normalize(v_normal);
+            vec3 light_vec = ubo.light_pos - v_pos;
+            float distance = length(light_vec);
+            vec3 light_dir = normalize(light_vec);
+            vec3 view_dir = normalize(ubo.eye_pos - v_pos);
+            vec3 halfway_dir = normalize(light_dir + view_dir);
 
-                vec3 norm = normalize(v_normal);
-                vec3 light_dir = normalize(light_pos - v_pos);
-                vec3 view_dir = normalize(ubo.eye_pos - v_pos);
-                vec3 halfway_dir = normalize(light_dir + view_dir);
+            float attenuation = ubo.light_intensity / (distance * distance + 1.0);
 
-                float diff = max(dot(norm, light_dir), 0.0);
-                vec3 diffuse = diff * light_color * (1.0 - metalness); 
+            // 1. Diffuse
+            float metal_diffuse_factor = mix(1.0, 0.2, metalness); 
+            float diff = max(dot(norm, light_dir), 0.0);
+            vec3 diffuse = diff * ubo.light_color * metal_diffuse_factor;
 
-                float ambient_strength = 0.05;
-                vec3 ambient = ambient_strength * light_color * (1.0 - metalness);
+            // 2. Specular
+            vec3 spec_color = mix(vec3(1.0), v_color, metalness); 
+            float spec_angle = max(dot(norm, halfway_dir), 0.0);
+            float spec_factor = pow(spec_angle, shininess) * (1.0 - roughness);
+            vec3 specular = spec_strength * spec_factor * ubo.light_color * spec_color;
 
-                vec3 spec_color = mix(vec3(1.0), v_color, metalness); 
-                float spec_angle = max(dot(norm, halfway_dir), 0.0);
-                float spec_factor = pow(spec_angle, shininess) * (1.0 - roughness);
-                vec3 specular = spec_strength * spec_factor * light_color * spec_color;
+            // 3. Ambient
+            float ambient_boost = mix(0.03, 0.08, metalness);
+            vec3 ambient = ambient_boost * v_color;
 
-                vec3 result = (ambient + diffuse) * v_color + specular;
-                f_color = vec4(result, 1.0);
-            }
+            // 4. Combine
+            vec3 result = ambient + (diffuse * v_color + specular) * attenuation;
+
+            // Tone Mapping
+            result = result / (result + vec3(1.0));
+            
+            f_color = vec4(result, 1.0);
+        }
         "
     }
 }

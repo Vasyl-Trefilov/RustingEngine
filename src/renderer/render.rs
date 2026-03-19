@@ -37,8 +37,6 @@ pub fn process_render(
         }])
         .bind_pipeline_graphics(pipeline.clone());
     
-    // Notice the semicolon here! 
-    // This function just adds commands to the builder created in main.
 }
 
 pub fn create_builder(cb_allocator: &StandardCommandBufferAllocator, queue: &Arc<Queue>) -> AutoCommandBufferBuilder<PrimaryAutoCommandBuffer> {

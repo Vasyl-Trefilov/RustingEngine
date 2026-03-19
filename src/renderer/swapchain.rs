@@ -10,26 +10,24 @@ use winit::window::Window;
 use vulkano::image::ImageAccess;
 
 pub fn create_swapchain_and_images(
-    device: Arc<Device>,
-    surface: Arc<Surface>,
+    device: &Arc<Device>,
+    surface: &Arc<Surface>,
     window: &Window,
 ) -> (Arc<Swapchain>, Vec<Arc<SwapchainImage>>) {
-    let caps = device.physical_device().surface_capabilities(&surface, Default::default()).unwrap();
-    let format = device.physical_device().surface_formats(&surface, Default::default()).unwrap()[0].0;
-
-    Swapchain::new(
-        device,
-        surface,
-        SwapchainCreateInfo {
-            min_image_count: caps.min_image_count,
-            image_format: Some(format),
-            image_extent: window.inner_size().into(),
-            image_usage: ImageUsage::COLOR_ATTACHMENT,
-            composite_alpha: caps.supported_composite_alpha.into_iter().next().unwrap(),
-            present_mode: PresentMode::Immediate, // High FPS mode
-            ..Default::default()
-        },
-    ).unwrap()
+    let caps = device.physical_device().surface_capabilities(surface, Default::default()).unwrap();
+    let format = device.physical_device().surface_formats(surface, Default::default()).unwrap()[0].0;
+    
+    let (sw, img) = Swapchain::new(device.clone(), surface.clone(), SwapchainCreateInfo {
+        min_image_count: caps.min_image_count,  // Minimum buffers for smooth rendering
+        image_format: Some(format),
+        image_extent: window.inner_size().into(),
+        image_usage: ImageUsage::COLOR_ATTACHMENT,  // We'll draw to these images
+        composite_alpha: caps.supported_composite_alpha.into_iter().next().unwrap(),
+        present_mode: PresentMode::Immediate,  // Show frames immediately (no vsync), can be used for benchmarking or just for fun
+        // present_mode: PresentMode::Fifo, // So, only Fifo is guaranteed to be supported on every device. And I think its better for some kind of prod, if I ever will get to this point, but for now, I want to see the maximum fps, so I will use Immediate, but if you want to use Fifo, its your choise
+        ..Default::default()
+    }).unwrap();
+    (sw, img)
 }
 
 pub fn create_render_pass(device: Arc<Device>, swapchain: &Arc<Swapchain>) -> std::sync::Arc<RenderPass> {

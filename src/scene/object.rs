@@ -7,11 +7,11 @@ use nalgebra::{Matrix4, Rotation3, Vector3};
 pub struct InstanceData {
     pub model: [[f32; 4]; 4], // 64 bytes
     pub color: [f32; 3], // 12 bytes
+    pub padding: f32,   // hahaha, so basically, this shit is useless, but we need it, bc I said(we really need it to keep data in 16 bytes for GPU)
     pub shininess: f32, // 4 bytes (Total 80)
     pub specular_strength: f32, // 4 bytes
     pub roughness: f32, // 4 bytes
     pub metalness: f32, // 4 bytes
-    pub padding: f32,   // hahaha, so basically, this shit is useless, but we need it, bc I said(we really need it to keep data in 16 bytes for GPU)
     // Total 96, perfect for GPU, bc 96 mod 16 is 0
 }
 
