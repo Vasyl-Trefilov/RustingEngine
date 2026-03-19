@@ -1,12 +1,10 @@
 // ! SHAPE AND MESH SYSTEM - Defines geometry and scene organization
 // More I do this, more I understand and respect all developers that created a blender, unity, unreal engine and etc. just F for every man that did something like that and biggest F for that people, who did it opensource. F
-use nalgebra::{Matrix4, Rotation3, Vector3};
+pub mod gltfLoader;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator};
 use vulkano::pipeline::graphics::vertex_input::Vertex;
-use vulkano::command_buffer::AutoCommandBufferBuilder;
-
 // * Trait combining all requirements for vertex types
 pub trait VertexType: Vertex + bytemuck::Pod + bytemuck::Zeroable + Send + Sync {}
 

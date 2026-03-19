@@ -29,24 +29,48 @@ pub struct FrameData {
     pub descriptor_set: Arc<PersistentDescriptorSet>,
 }
 
+#[derive(Clone, Copy)]
+pub struct InstanceHandle {
+    pub batch_index: usize,
+    pub instance_index: usize,
+}
+
 impl RenderScene {
 
-    pub fn add_instance(&mut self, mesh: Mesh, instance: Instance) {
-        // println!("Adding instance at position: {:?}", instance.transform.position);
-        
-        for batch in &mut self.batches {
+    pub fn add_instance(&mut self, mesh: Mesh, instance: Instance) -> InstanceHandle {
+        for (batch_index, batch) in self.batches.iter_mut().enumerate() {
             if batch.mesh.vertices.buffer() == mesh.vertices.buffer() {
                 batch.instances.push(instance);
-                // println!("Added to existing batch, total instances: {}", batch.instances.len());
-                return;
+
+                return InstanceHandle {
+                    batch_index,
+                    instance_index: batch.instances.len() - 1,
+                };
             }
         }
-        
-        // println!("Creating new batch for mesh");
+
         self.batches.push(RenderBatch {
             mesh,
             instances: vec![instance],
         });
+
+        InstanceHandle {
+            batch_index: self.batches.len() - 1,
+            instance_index: 0,
+        }
+    }
+
+    pub fn remove_instance(&mut self, handle: InstanceHandle) {
+        if let Some(batch) = self.batches.get_mut(handle.batch_index) {
+            if handle.instance_index < batch.instances.len() {
+                batch.instances.swap_remove(handle.instance_index);
+            }
+
+            // Optional: remove empty batches
+            if batch.instances.is_empty() {
+                self.batches.swap_remove(handle.batch_index);
+            }
+        }
     }
 
     // ! This is important part, the 'max_instances' is not so cool, I will try to rewrite it 

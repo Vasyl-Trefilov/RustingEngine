@@ -82,7 +82,30 @@ impl Transform {
         
         model_matrix.into()
     }
+    pub fn from_matrix(m: Matrix4<f32>) -> Self {
+        let position = [m[(0, 3)], m[(1, 3)], m[(2, 3)]];
 
+        let scale = [
+            Vector3::new(m[(0, 0)], m[(1, 0)], m[(2, 0)]).norm(),
+            Vector3::new(m[(0, 1)], m[(1, 1)], m[(2, 1)]).norm(),
+            Vector3::new(m[(0, 2)], m[(1, 2)], m[(2, 2)]).norm(),
+        ];
+
+        let rotation_matrix = nalgebra::Matrix3::new(
+            m[(0, 0)] / scale[0], m[(0, 1)] / scale[1], m[(0, 2)] / scale[2],
+            m[(1, 0)] / scale[0], m[(1, 1)] / scale[1], m[(1, 2)] / scale[2],
+            m[(2, 0)] / scale[0], m[(2, 1)] / scale[1], m[(2, 2)] / scale[2],
+        );
+
+        let rotation = Rotation3::from_matrix_unchecked(rotation_matrix)
+            .euler_angles();
+
+        Self {
+            position,
+            rotation: [rotation.0, rotation.1, rotation.2],
+            scale,
+        }
+    }
     // * Helper methods for common transformations, but I use dirrect change, bc I did like that all time in THREE.js, but this functions can be pretty useful for someone
     // translate
     pub fn translate(mut self, x: f32, y: f32, z: f32) -> Self {

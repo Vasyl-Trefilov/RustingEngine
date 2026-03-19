@@ -1,3 +1,4 @@
+use crate::scene::InstanceHandle;
 use crate::shapes::Mesh;
 use crate::RenderScene;
 use crate::AnimationType;
@@ -54,7 +55,7 @@ impl Default for RainSettings {
 
 // --- EFFECTS ---
 
-pub fn create_fountain(scene: &mut RenderScene, triangle: Mesh, count: u32, settings: Option<FountainSettings>) {
+pub fn create_fountain(scene: &mut RenderScene, triangle: Mesh, count: u32, settings: Option<FountainSettings>) -> Vec<InstanceHandle> {
     let s = settings.unwrap_or_default();
     let mut rng = rand::rng();
     let grav = s.gravity;
@@ -80,11 +81,12 @@ pub fn create_fountain(scene: &mut RenderScene, triangle: Mesh, count: u32, sett
         transform.scale = [scale; 3];
     }));
 
+    let mut handles = Vec::new();
     for i in 0..count {
         let angle = (i as f32) * (std::f32::consts::PI * 2.0 / count as f32);
         let speed = rng.random_range(0.02..0.05);
         
-        scene.add_instance(triangle.clone(), Instance {
+        let handle = scene.add_instance(triangle.clone(), Instance {
             transform: Transform { position: base_pos, scale: [0.1; 3], ..Default::default() },
             original_position: base_pos,
             animation: fountain_logic.clone(),
@@ -92,10 +94,12 @@ pub fn create_fountain(scene: &mut RenderScene, triangle: Mesh, count: u32, sett
             color: s.color,
             metalness: 0.8, shininess: 4.0, ..Default::default()
         });
+        handles.push(handle);
     }
+    handles
 }
 
-pub fn create_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<FireSettings>) {
+pub fn create_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<FireSettings>) -> Vec<InstanceHandle> {
     let s = settings.unwrap_or_default();
     let mut rng = rand::rng();
     let base_pos = s.position;
@@ -121,19 +125,23 @@ pub fn create_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Op
         }
     }));
 
+    let mut handles = Vec::new();
+
     for _ in 0..count {
         let color = [1.0, rng.random_range(0.1..0.4), 0.0];
-        scene.add_instance(mesh.clone(), Instance {
+        let handle = scene.add_instance(mesh.clone(), Instance {
             transform: Transform { position: [base_pos[0], base_pos[1] + rng.random_range(0.0..max_h), base_pos[2]], ..Default::default() },
             original_position: base_pos,
             animation: fire_logic.clone(),
             velocity: [0.0, rng.random_range(0.05..0.1), 0.0],
             color, metalness: 0.8, shininess: 4.0, ..Default::default()
         });
+        handles.push(handle);
     }
+    handles
 }
 
-pub fn create_void_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<FireSettings>) {
+pub fn create_void_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<FireSettings>) -> Vec<InstanceHandle> {
     let s = settings.unwrap_or_default();
     let mut rng = rand::rng();
     let base_pos = s.position;
@@ -154,9 +162,9 @@ pub fn create_void_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, setting
             transform.position[1] += (rand::random::<f32>() - 0.5) * 0.5;
         }
     }));
-
+    let mut handles = Vec::new();
     for _ in 0..count {
-        scene.add_instance(mesh.clone(), Instance {
+        let handle = scene.add_instance(mesh.clone(), Instance {
             transform: Transform { position: base_pos, ..Default::default() },
             original_position: base_pos,
             animation: fire_logic.clone(),
@@ -164,10 +172,12 @@ pub fn create_void_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, setting
             color: [1.0, 1.0, 1.0],
             metalness: 1.0, shininess: 128.0, specular_strength: 0.8, ..Default::default()
         });
+        handles.push(handle);
     }
+    handles
 }
 
-pub fn create_event_horizon(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<SphereSettings>) {
+pub fn create_event_horizon(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<SphereSettings>) -> Vec<InstanceHandle> {
     let s = settings.unwrap_or_default();
     let mut rng = rand::rng();
     let center = s.center;
@@ -202,7 +212,7 @@ pub fn create_event_horizon(scene: &mut RenderScene, mesh: Mesh, count: u32, set
         let s_val = (dist * 0.01).clamp(0.02, 0.4);
         transform.scale = [s_val, s_val * 2.0, s_val]; 
     }));
-
+    let mut handles = Vec::new();
     for _ in 0..count {
         let angle: f32 = rng.random_range(0.0..6.28);
         let d = rng.random_range(5.0..s.radius);
@@ -212,7 +222,8 @@ pub fn create_event_horizon(scene: &mut RenderScene, mesh: Mesh, count: u32, set
         } else {
             color = [rng.random_range(0.0..1.0), rng.random_range(0.0..1.0), rng.random_range(0.0..1.0)];
         }
-        scene.add_instance(mesh.clone(), Instance {
+        
+        let handle = scene.add_instance(mesh.clone(), Instance {
             transform: Transform {
                 position: [center[0] + angle.cos() * d, center[1] + rng.random_range(-2.0..2.0), center[2] + angle.sin() * d],
                 rotation: [rng.random_range(0.0..6.28), rng.random_range(0.0..6.28), 0.0],
@@ -226,9 +237,12 @@ pub fn create_event_horizon(scene: &mut RenderScene, mesh: Mesh, count: u32, set
             shininess: 64.0,       
             ..Default::default()
         });
+        handles.push(handle);
     }
+    handles
 }
-pub fn create_monochrome_rain(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<RainSettings>) {
+
+pub fn create_monochrome_rain(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<RainSettings>) -> Vec<InstanceHandle> {
     let s = settings.unwrap_or_default();
     let mut rng = rand::rng();
     let half_w = s.area[0] / 2.0;
@@ -240,19 +254,21 @@ pub fn create_monochrome_rain(scene: &mut RenderScene, mesh: Mesh, count: u32, s
         if transform.position[1] < -height/2.0 { transform.position[1] = height/2.0; }
         transform.scale = [0.02, 0.6, 0.02];
     }));
-
+    let mut handles = Vec::new();
     for _ in 0..count {
         let pos = [rng.random_range(-half_w..half_w), rng.random_range(-height/2.0..height/2.0), rng.random_range(-half_d..half_d)];
-        scene.add_instance(mesh.clone(), Instance {
+        let handle = scene.add_instance(mesh.clone(), Instance {
             transform: Transform { position: pos, ..Default::default() },
             animation: rain_logic.clone(),
             velocity: [0.0, rng.random_range(s.speed..s.speed * 2.0), 0.0],
             color: [0.7, 0.8, 1.0], roughness: 1.0, ..Default::default()
         });
+    handles.push(handle);
     }
+    handles
 }
 
-pub fn create_nebula_sphere(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<SphereSettings>) {
+pub fn create_nebula_sphere(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<SphereSettings>) -> Vec<InstanceHandle> {
     let s = settings.unwrap_or_default();
     let mut rng = rand::rng();
     let center = s.center;
@@ -268,7 +284,7 @@ pub fn create_nebula_sphere(scene: &mut RenderScene, mesh: Mesh, count: u32, set
         let pulse = 0.1 + (elapsed * velocity[1] + original_pos[0]).sin().abs() * 0.15;
         transform.scale = [pulse; 3];
     }));
-
+    let mut handles = Vec::new();
     for _ in 0..count {
         let radius = rng.random_range(s.radius * 0.8..s.radius);
         let theta = rng.random_range(0.0..std::f32::consts::TAU);
@@ -277,12 +293,14 @@ pub fn create_nebula_sphere(scene: &mut RenderScene, mesh: Mesh, count: u32, set
         let y = center[1] + radius * phi.sin() * theta.sin();
         let z = center[2] + radius * phi.cos();
 
-        scene.add_instance(mesh.clone(), Instance {
+        let handle = scene.add_instance(mesh.clone(), Instance {
             transform: Transform { position: [x, y, z], ..Default::default() },
             original_position: [x, y, z],
             animation: stars_logic.clone(),
             velocity: [rng.random_range(0.05..s.rotation_speed), rng.random_range(1.0..3.0), 0.0],
             color: [1.0, 1.0, 1.0], roughness: 1.0, ..Default::default()
         });
+     handles.push(handle);
     }
+    handles
 }

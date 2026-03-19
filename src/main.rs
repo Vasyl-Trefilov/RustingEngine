@@ -32,8 +32,10 @@ use crate::scene::object::Transform;
 use crate::renderer::pipeline::create_pipeline;
 use crate::renderer::render::process_render;
 use crate::renderer::render::create_builder;
+use crate::shapes::gltfLoader::{load_gltf_mesh, load_gltf_scene};
 use crate::shapes::shapes::{create_sphere_subdivided, create_triangle};
 use crate::effects::{RainSettings, SphereSettings, create_event_horizon, create_fire, create_fountain, create_monochrome_rain, create_nebula_sphere, create_void_fire};
+use crate::scene::InstanceHandle;
 
 fn main() {
     let event_loop = EventLoop::new();
@@ -75,7 +77,7 @@ fn main() {
     // * Inputs
     let mut mouse_state = MouseState::default();
     // let mut prev_mouse_state = MouseState::default();
-    let mut inputs = InputState{speed: 0.01, ..Default::default()};
+    let mut inputs = InputState{speed: 0.1, ..Default::default()};
 
     // * Scene
     let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 1_000_000);
@@ -88,6 +90,11 @@ fn main() {
     let mut rng = rand::rng();
     let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
 
+    // let objects = load_gltf_scene(&memory_allocator, "./testModels/chillGuyWithMat.gltf"); // ! 3D MODELS IMPORT, LETS GO
+
+    // for (mesh, instance) in objects {
+    //     scene.add_instance(mesh, instance);
+    // }
 
     // create_star_sphere(&mut scene, triangle.clone(), 10000); // * this is the main performance check, just bc why not
     // create_fountain(&mut scene, triangle.clone(), 500);
@@ -101,89 +108,91 @@ fn main() {
     
 
     // * So I dont want to lie, this spheres was created by gemini, bc why not? 
-    // 1. POLISHED COPPER (High Metalness + Low Roughness)
-    scene.add_instance(
-        sphere_sub_mesh.clone(), 
-        Instance {
-            transform: Transform { position: [-6.0, 0.0, 0.0], ..Default::default() },
-            color: [0.89, 0.47, 0.33],        
-            shininess: 50.0,                 // Medium-sharp highlight
-            specular_strength: 0.8,          // Strong reflection
-            roughness: 0.05,                 // Very smooth surface, mirror-like
-            metalness: 1.0,                  // 100% metal: light is tinted by the copper color
-            ..Default::default()
-        }
-    );
+    // // 1. POLISHED COPPER (High Metalness + Low Roughness)
+    // let handle = scene.add_instance(
+    //     sphere_sub_mesh.clone(), 
+    //     Instance {
+    //         transform: Transform { position: [-6.0, 0.0, 0.0], ..Default::default() },
+    //         color: [0.89, 0.47, 0.33],        
+    //         shininess: 50.0,                 // Medium-sharp highlight
+    //         specular_strength: 0.8,          // Strong reflection
+    //         roughness: 0.05,                 // Very smooth surface, mirror-like
+    //         metalness: 1.0,                  // 100% metal: light is tinted by the copper color
+    //         ..Default::default()
+    //     }
+    // );
 
-    // 2. CHROME / MIRROR (Pure White + Zero Roughness + Extreme Shininess)
-    scene.add_instance(
-        sphere_sub_mesh.clone(), 
-        Instance {
-            transform: Transform { position: [-3.6, 0.0, 0.0], ..Default::default() },
-            color: [0.97, 0.97, 0.98],        
-            shininess: 1000.0,               // Reflection is a tiny, sharp pixel point
-            specular_strength: 1.0,          
-            roughness: 0.0,                  // Perfectly smooth
-            metalness: 1.0,                  // Reflects light source perfectly
-            ..Default::default()
-        }
-    );
+    // scene.remove_instance(handle);
 
-    // 3. 24K GOLD (Yellow Tint + High Shininess)
-    scene.add_instance(
-        sphere_sub_mesh.clone(), 
-        Instance {
-            transform: Transform { position: [-1.2, 0.0, 0.0], ..Default::default() },
-            color: [1.0, 0.85, 0.4],           
-            shininess: 400.0,                // Very sharp highlight
-            specular_strength: 0.9,            
-            roughness: 0.1,                  // Slight micro-scratches
-            metalness: 1.0,                  // Metal tints specular highlights to gold
-            ..Default::default()
-        }
-    );
+    // // 2. CHROME / MIRROR (Pure White + Zero Roughness + Extreme Shininess)
+    // scene.add_instance(
+    //     sphere_sub_mesh.clone(), 
+    //     Instance {
+    //         transform: Transform { position: [-3.6, 0.0, 0.0], ..Default::default() },
+    //         color: [0.97, 0.97, 0.98],        
+    //         shininess: 1000.0,               // Reflection is a tiny, sharp pixel point
+    //         specular_strength: 1.0,          
+    //         roughness: 0.0,                  // Perfectly smooth
+    //         metalness: 1.0,                  // Reflects light source perfectly
+    //         ..Default::default()
+    //     }
+    // );
 
-    // 4. MATTE PLASTIC (Zero Metalness + High Roughness)
-    scene.add_instance(
-        sphere_sub_mesh.clone(), 
-        Instance {
-            transform: Transform { position: [1.2, 0.0, 0.0], ..Default::default() },
-            color: [0.1, 0.4, 0.8],          
-            shininess: 5.0,                  // Very broad, dull highlight
-            specular_strength: 0.1,          // Weak reflection   
-            roughness: 0.8,                  // Rough surface scatters light (no shine)
-            metalness: 0.0,                  // Non-metal: uses standard diffuse lighting
-            ..Default::default()
-        }
-    );
+    // // 3. 24K GOLD (Yellow Tint + High Shininess)
+    // scene.add_instance(
+    //     sphere_sub_mesh.clone(), 
+    //     Instance {
+    //         transform: Transform { position: [-1.2, 0.0, 0.0], ..Default::default() },
+    //         color: [1.0, 0.85, 0.4],           
+    //         shininess: 400.0,                // Very sharp highlight
+    //         specular_strength: 0.9,            
+    //         roughness: 0.1,                  // Slight micro-scratches
+    //         metalness: 1.0,                  // Metal tints specular highlights to gold
+    //         ..Default::default()
+    //     }
+    // );
 
-    // 5. GLOSSY CAR PAINT (Low Metalness + Very Low Roughness)
-    scene.add_instance(
-        sphere_sub_mesh.clone(), 
-        Instance {
-            transform: Transform { position: [3.6, 0.0, 0.0], ..Default::default() },
-            color: [0.8, 0.05, 0.05],          
-            shininess: 600.0,                // Sharp reflection "clear coat" look
-            specular_strength: 0.5,             
-            roughness: 0.02,                 // Very smooth finish
-            metalness: 0.0,                  // Non-metal: white highlights on red base
-            ..Default::default()
-        }
-    );
+    // // 4. MATTE PLASTIC (Zero Metalness + High Roughness)
+    // scene.add_instance(
+    //     sphere_sub_mesh.clone(), 
+    //     Instance {
+    //         transform: Transform { position: [1.2, 0.0, 0.0], ..Default::default() },
+    //         color: [0.1, 0.4, 0.8],          
+    //         shininess: 5.0,                  // Very broad, dull highlight
+    //         specular_strength: 0.1,          // Weak reflection   
+    //         roughness: 0.8,                  // Rough surface scatters light (no shine)
+    //         metalness: 0.0,                  // Non-metal: uses standard diffuse lighting
+    //         ..Default::default()
+    //     }
+    // );
 
-    // 6. BRUSHED ALUMINUM (High Metalness + High Roughness)
-    scene.add_instance(
-        sphere_sub_mesh.clone(), 
-        Instance {
-            transform: Transform { position: [6.0, 0.0, 0.0], ..Default::default() },
-            color: [0.4, 0.42, 0.45],          
-            shininess: 20.0,                 // Wide, spread-out highlight
-            specular_strength: 0.3,             
-            roughness: 0.7,                  // High roughness blurs the metallic reflection
-            metalness: 1.0,                  // Still metal, but "satin" or "brushed" finish
-            ..Default::default()
-        }
-    );
+    // // 5. GLOSSY CAR PAINT (Low Metalness + Very Low Roughness)
+    // scene.add_instance(
+    //     sphere_sub_mesh.clone(), 
+    //     Instance {
+    //         transform: Transform { position: [3.6, 0.0, 0.0], ..Default::default() },
+    //         color: [0.8, 0.05, 0.05],          
+    //         shininess: 600.0,                // Sharp reflection "clear coat" look
+    //         specular_strength: 0.5,             
+    //         roughness: 0.02,                 // Very smooth finish
+    //         metalness: 0.0,                  // Non-metal: white highlights on red base
+    //         ..Default::default()
+    //     }
+    // );
+
+    // // 6. BRUSHED ALUMINUM (High Metalness + High Roughness)
+    // scene.add_instance(
+    //     sphere_sub_mesh.clone(), 
+    //     Instance {
+    //         transform: Transform { position: [6.0, 0.0, 0.0], ..Default::default() },
+    //         color: [0.4, 0.42, 0.45],          
+    //         shininess: 20.0,                 // Wide, spread-out highlight
+    //         specular_strength: 0.3,             
+    //         roughness: 0.7,                  // High roughness blurs the metallic reflection
+    //         metalness: 1.0,                  // Still metal, but "satin" or "brushed" finish
+    //         ..Default::default()
+    //     }
+    // );
 
     let mut framebuffers = create_framebuffers(&images, &render_pass, &memory_allocator);
 
@@ -196,7 +205,8 @@ fn main() {
     let mut frame_count: u32 = 0;
     let mut fps_timer = std::time::Instant::now();
     let mut total_fps = 0;
-
+    let mut effect = 0;
+    let mut effect_handlers: Vec<InstanceHandle> = Vec::new();
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
@@ -243,9 +253,30 @@ fn main() {
                 },
                 WindowEvent::MouseInput { state, button, .. } => {
                     if button == winit::event::MouseButton::Left {
-                        inputs.is_mouse_dragging = (state == winit::event::ElementState::Pressed);
+                        inputs.is_mouse_dragging = state == winit::event::ElementState::Pressed;
                     }
-                },
+                    if button == winit::event::MouseButton::Right {
+                        effect_handlers.sort_by(|a, b| {
+                            b.batch_index.cmp(&a.batch_index)
+                                .then(b.instance_index.cmp(&a.instance_index))
+                        });
+                        for handle in &effect_handlers {
+                            scene.remove_instance(*handle);
+                        }
+                        effect_handlers.clear();
+                        match effect{
+                            0=>effect_handlers = create_monochrome_rain(&mut scene, triangle.clone(), 3000, Some(RainSettings{speed: 0.01, ..Default::default()})),
+                            1=>effect_handlers = create_fountain(&mut scene, triangle.clone(), 500, None),
+                            2=>effect_handlers = create_fire(&mut scene, triangle.clone(), 4000, None),
+                            3=>effect_handlers = create_void_fire(&mut scene, triangle.clone(), 3000, None),
+                            4=>effect_handlers = create_nebula_sphere(&mut scene, triangle.clone(), 3000, None),
+                            5=>effect_handlers = create_event_horizon(&mut scene, triangle.clone(), 3000, Some(SphereSettings{center: [0.0,0.0,0.0], radius: 20.0, random_color: true, ..Default::default()})),
+                            _=>effect=-1
+                    } 
+                    effect+=1;
+                    }
+                     
+                }, 
                 WindowEvent::CursorMoved { position, .. } => {
                     if !inputs.mouse_captured {
                         let dx = position.x as f32 - inputs.last_mouse_pos[0];

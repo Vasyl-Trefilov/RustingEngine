@@ -12,6 +12,7 @@ vulkano-shaders = "0.33.0"
 vulkano-win = "0.33.0"
 winit = "0.28.0"
 rayon = "1.10"
+gltf = "1.4.1"
 
 [profile.release]
 opt-level = 3
