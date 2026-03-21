@@ -43,7 +43,7 @@ fn main() {
     let aspect = dims[0] as f32 / dims[1] as f32;
     let fov = 45.0f32.to_radians();  // Field of view in radians, its like a minecraft fov, if you know
     let z_near = 0.1;                 // Near clipping plane, it means, if some object is 0.1 from camera, it will not be shown
-    let z_far = 500.0;                 // Far clipping plane, how far can 'camera' see, you can set like 1000 if you are not developing some AAA game, but if you do, I guess you know better then me what to do
+    let z_far = 1000.0;                 // Far clipping plane, how far can 'camera' see, you can set like 1000 if you are not developing some AAA game, but if you do, I guess you know better then me what to do
 
     // ! PROJECTION MATRIX - Converts 3D to 2D screen coordinates
     let mut proj: [[f32; 4]; 4] = create_projection_matrix(aspect, fov, z_near, z_far);
@@ -77,35 +77,103 @@ fn main() {
     // * Inputs
     let mut mouse_state = MouseState::default();
     // let mut prev_mouse_state = MouseState::default();
-    let mut inputs = InputState{speed: 0.01, ..Default::default()};
-
-    // * Scene
-    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, &base.queue, 3, 1_000_000);
-    let mut camera = Camera {
-        position: [0.0, 0.0, 10.0],
-        yaw: -90.0f32.to_radians(),
-        pitch: 0.0,
-    };
-    scene.set_light([20.0, 20.0, 20.0], [1.0, 1.0, 1.0], 10000.0);
+    let mut inputs = InputState{speed: 0.1, ..Default::default()};
     let mut rng = rand::rng();
     let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
 
-    let (objects, textures) = load_gltf_scene(&memory_allocator, "./testModels/Rustyball.gltf"); // ! 3D MODELS IMPORT, LETS GO
-    scene.set_textures(&textures, &base.queue, &memory_allocator);
-    for (mesh, instance) in objects {
-        scene.add_instance(mesh, instance);
+    // * Scene
+    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, &base.queue, 3, 1_000_000); // 1_000_000
+    let mut camera = Camera {
+        position: [0.0, 0.0, 20.0],
+        yaw: 90.0f32.to_radians(), 
+        pitch: 0.0,
+    };
+    scene.set_light([30.0, 30.0, 30.0],[1.0, 0.95, 0.9], 15.0); 
+    
+    let (objects, textures) = load_gltf_scene(&memory_allocator, "./testModels/1kRustingSphere.gltf"); // ! 3D MODELS IMPORT, LETS GO
+    scene.set_textures(&pipeline, &textures, &base.queue, &memory_allocator);
+    for (mesh, mut instance) in objects {
+        instance.emissive = 0.5;
+        instance.roughness = 0.5;
+        instance.metalness = 0.5;
+        // instance.transform.uniform_scale(4.0);
+        // scene.add_instance(mesh.clone(), instance.clone());
+        for i in 0..10 {
+            for j in 0..10 {
+                for k in 0..10 {
+                    instance.transform.position[0] = i as f32 * -2.5;
+                    instance.transform.position[1] = j as f32 * -2.5;
+                    instance.transform.position[2] = k as f32 * -2.5;
+                    scene.add_instance(mesh.clone(), instance.clone());
+                }
+            }
+        }
     }
 
-    // create_star_sphere(&mut scene, triangle.clone(), 10000); // * this is the main performance check, just bc why not
-    // create_fountain(&mut scene, triangle.clone(), 500);
-    // create_fire(&mut scene, triangle.clone(), 4000, None);
-    // create_void_fire(&mut scene, triangle.clone(), 3000, None);
-    // create_nebula_sphere(&mut scene, triangle.clone(), 3000, None);
-    // create_event_horizon(&mut scene, triangle.clone(), 3000, Some(SphereSettings{center: [0.0,0.0,0.0], radius: 20.0, random_color: true, ..Default::default()}));
-    // create_monochrome_rain(&mut scene, triangle.clone(), 3000, Some(RainSettings{speed: 0.01, ..Default::default()}));
-    
     let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0,1.0,1.0], 3);
     
+
+    let handle = scene.add_instance(
+        sphere_sub_mesh.clone(), 
+        Instance {
+            transform: Transform { position: [20.0, 20.0, 20.0], scale: [4.0, 4.0, 4.0], ..Default::default() },
+            color: [1.0, 1.0, 0.0],        
+            roughness: 0.05,                 // Very smooth surface, mirror-like
+            metalness: 1.0,                  // 100% metal: light is tinted by the copper color
+            emissive: 1.0,
+            ..Default::default()
+        }
+    );
+    // let stars_logic = AnimationType::Custom(Arc::new(|transform, _velocity, original_pos, color, elapsed| {
+    //     let speed = 0.1; 
+    //     let angle = elapsed * speed;
+        
+    //     let cos_a = angle.cos();
+    //     let sin_a = angle.sin();
+
+    //     transform.position[0] = original_pos[0] * cos_a - original_pos[2] * sin_a;
+    //     transform.position[2] = original_pos[0] * sin_a + original_pos[2] * cos_a;
+        
+    // }));
+
+    // for _ in 0..100000 {
+    //     let radius = 100.0; 
+        
+    //     let theta = rng.random_range(0.0..std::f32::consts::TAU);
+    //     let phi = rng.random_range(0.0..std::f32::consts::PI);
+        
+    //     let x = radius * phi.sin() * theta.cos();
+    //     let y = radius * phi.sin() * theta.sin();
+    //     let z = radius * phi.cos();
+    //     // let color = [rng.random_range(0.0..1.0),rng.random_range(0.0..1.0),rng.random_range(0.0..1.0)]; // This is easy and cool, but I am more dark/white guy(I mean, I like blackwhite style)
+    //     let color = [1.0,1.0,1.0];
+    //     scene.add_instance(
+    //         triangle.clone(),
+    //         Instance {
+    //             transform: Transform {
+    //                 position: [x, y, z],
+    //                 scale: [0.2, 0.2, 0.2],
+    //                 ..Default::default()
+    //             },
+    //             original_position: [x, y, z], 
+    //             animation: stars_logic.clone(),
+    //             velocity: [0.0, 0.0, 0.0],
+    //             color: color, 
+    //             emissive: 1.0,
+    //             ..Default::default()
+    //         }
+    //     );
+    // }
+    // use crate::effects::FireSettings;
+    // create_star_sphere(&mut scene, triangle.clone(), 10000); // * this is the main performance check, just bc why not
+    // create_fountain(&mut scene, triangle.clone(), 500);
+    // create_fire(&mut scene, triangle.clone(), 4000, Some(FireSettings{position: [20.0, 20.0, 20.0], max_height: 10.0, spread: 1.0}));
+    // create_void_fire(&mut scene, triangle.clone(), 3000, None);
+    // create_nebula_sphere(&mut scene, triangle.clone(), 3000, None);
+    // create_event_horizon(&mut scene, triangle.clone(), 3000, Some(SphereSettings{center: [20.0,20.0,20.0], radius: 8.0, random_color: false, ..Default::default()}));
+    // create_monochrome_rain(&mut scene, triangle.clone(), 3000, Some(RainSettings{speed: 0.01, ..Default::default()}));
+    
+
     // * So I dont want to lie, this spheres was created by gemini, bc why not? 
     // // 1. POLISHED COPPER (High Metalness + Low Roughness)
     // let handle = scene.add_instance(
@@ -336,15 +404,16 @@ fn main() {
                 if suboptimal { recreate_swapchain = true; }
 
                 let mut builder = create_builder(&cb_allocator, &base.queue);
-                process_render(&mut builder, &framebuffers, img_index, dims, &pipeline);
 
                 view = camera_rotate(&mut camera, &inputs);
                 eye_pos = camera.position;
 
-                // Scene render, entry point for my future library
-                // When I will release 1.0 version of library, I will try to avoid API changes
                 scene.update(elapsed, &mouse_state);
-                scene.render(&mut builder, &pipeline, &memory_allocator, frame_index, view, proj, eye_pos);
+                scene.prepare_frame(frame_index, view, proj, eye_pos);
+                scene.record_instance_transfer(&mut builder, frame_index);
+
+                process_render(&mut builder, &framebuffers, img_index, dims, &pipeline);
+                scene.record_draws(&mut builder, &pipeline, frame_index);
 
                 builder.end_render_pass().unwrap();
                 let command_buffer = builder.build().unwrap();

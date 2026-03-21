@@ -62,7 +62,7 @@ fn process_node(
 			// Base color (RGBA)
 			let base_color = pbr.base_color_factor();
 
-			// Convert to RGB
+			// Convert to RGB, bc I am bitch and I havent done alpha
 			let color = [base_color[0], base_color[1], base_color[2]];
 
 			// Metallic / roughness

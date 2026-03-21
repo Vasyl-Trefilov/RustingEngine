@@ -1,4 +1,5 @@
 pub mod camera;
+pub mod frustum;
 pub mod pipeline;
 pub mod swapchain;
 pub mod render;

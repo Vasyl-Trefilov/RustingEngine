@@ -57,15 +57,22 @@ pub fn camera_rotate(camera: &mut Camera, inputs: &InputState) -> [[f32; 4]; 4] 
     let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
 
     let forward = [
+        camera.yaw.cos(),
+        0.0,
+        camera.yaw.sin(),
+    ];
+
+    let len = (forward[0]*forward[0] + forward[2]*forward[2]).sqrt();
+    let forward = [-forward[0]/len, 0.0, -forward[2]/len];
+    let view_forward = [
         yaw_cos * pitch_cos,
         pitch_sin,
         yaw_sin * pitch_cos
     ];
-
     let right = [
-        yaw_sin, 
+        -camera.yaw.sin(),
         0.0,
-        -yaw_cos
+        camera.yaw.cos(),
     ];
     let world_up = [0.0, 1.0, 0.0];
     if inputs.mouse_captured {
@@ -92,11 +99,11 @@ pub fn camera_rotate(camera: &mut Camera, inputs: &InputState) -> [[f32; 4]; 4] 
         }
 
         let target = [
-            camera.position[0] - forward[0],
-            camera.position[1] + forward[1],
-            camera.position[2] - forward[2],
+            camera.position[0] + view_forward[0],
+            camera.position[1] + view_forward[1],
+            camera.position[2] + view_forward[2],
         ];
-        
+                
         create_look_at(camera.position, target, world_up)
     } else {
         
@@ -127,9 +134,9 @@ pub fn camera_rotate(camera: &mut Camera, inputs: &InputState) -> [[f32; 4]; 4] 
             camera.position[1] -= speed_step;
         }
         let target = [
-            camera.position[0] - forward[0],
-            camera.position[1] - forward[1],
-            camera.position[2] - forward[2],
+            camera.position[0] + view_forward[0],
+            camera.position[1] + view_forward[1],
+            camera.position[2] + view_forward[2],
         ];
         create_look_at(camera.position, target, [0.0, 1.0, 0.0])
     }

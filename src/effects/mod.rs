@@ -7,8 +7,6 @@ use crate::Instance;
 use crate::Transform;
 use rand::*;
 
-// --- SETTINGS STRUCTURES ---
-
 pub struct FountainSettings {
     pub position: [f32; 3],
     pub color: [f32; 3],
@@ -53,7 +51,6 @@ impl Default for RainSettings {
     }
 }
 
-// --- EFFECTS ---
 
 pub fn create_fountain(scene: &mut RenderScene, triangle: Mesh, count: u32, settings: Option<FountainSettings>) -> Vec<InstanceHandle> {
     let s = settings.unwrap_or_default();
@@ -223,7 +220,8 @@ pub fn create_event_horizon(scene: &mut RenderScene, mesh: Mesh, count: u32, set
         if s.random_color == false {
             color = [1.0, 1.0, 1.0];
         } else {
-            color = [rng.random_range(0.0..1.0), rng.random_range(0.0..1.0), rng.random_range(0.0..1.0)];
+            // color = [rng.random_range(0.0..1.0), rng.random_range(0.0..1.0), rng.random_range(0.0..1.0)];
+            color = [rng.random_range(0.5..1.0), rng.random_range(0.5..1.0), 0.0];
         }
         
         let handle = scene.add_instance(mesh.clone(), Instance {

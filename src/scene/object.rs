@@ -9,7 +9,8 @@ use std::sync::Arc;
 pub struct InstanceData {
     pub model: [[f32; 4]; 4], // 64 bytes
     pub color: [f32; 3], // 12 bytes
-    pub padding: f32,   // hahaha, so basically, this shit is useless, but we need it, bc I said(we really need it to keep data in 16 bytes for GPU)
+    pub emissive: f32,        // 4 bytes
+    // pub padding: f32,   // hahaha, so basically, this shit is useless, but we need it, bc I said(we really need it to keep data in 16 bytes for GPU)
     pub mat_props: [f32; 4], // [roughness, metalness, reserved, reserved]
     // Total 96, perfect for GPU, bc 96 mod 16 is 0
 }
@@ -18,6 +19,7 @@ pub struct InstanceData {
 pub struct Instance {
     pub transform: Transform,
     pub color: [f32; 3],
+    pub emissive: f32,
     pub roughness: f32,    
     pub metalness: f32,
     pub base_color_texture: Option<usize>,
@@ -37,6 +39,7 @@ impl Default for Instance {
             velocity: [0.0, 0.0, 0.0],
             model_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], 
             color: [1.0, 1.0, 1.0],
+            emissive: 0.0,
             base_color_texture: None,
             metallic_roughness_texture: None,
             roughness: 0.5,

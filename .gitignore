@@ -2,3 +2,5 @@
 /compare/build
 .vscode
 /compare/target
+/testModels/rustingSphere.bin
+/testModels/RustSphere.png

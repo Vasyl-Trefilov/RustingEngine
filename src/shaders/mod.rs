@@ -3,21 +3,25 @@ pub mod vs {
         ty: "vertex",
         src: "
         #version 450
+
+        struct InstanceData {
+            mat4 model;
+            vec3 color;
+            float emissive;
+            vec4 mat_props;
+        };
+
         layout(location = 0) in vec3 position;
         layout(location = 1) in vec3 normal;
         layout(location = 2) in vec2 uv;
-        layout(location = 4) in vec4 model_row0;
-        layout(location = 5) in vec4 model_row1;
-        layout(location = 6) in vec4 model_row2;
-        layout(location = 7) in vec4 model_row3;
-        layout(location = 8) in vec3 instance_color; 
-        layout(location = 9) in vec4 instance_mat_props;
 
         layout(location = 0) out vec3 v_color;
         layout(location = 1) out vec3 v_normal;
         layout(location = 2) out vec3 v_pos;
         layout(location = 3) out vec4 v_mat_data;
-        layout(location = 4) out vec2 v_uv; 
+        layout(location = 4) out vec2 v_uv;
+        layout(location = 5) out float v_emissive;
+        layout(location = 6) out vec2 v_screen_uv; 
 
         layout(set = 0, binding = 0) uniform UniformBufferObject {
             mat4 view;
@@ -25,15 +29,28 @@ pub mod vs {
             vec3 eye_pos;
         } ubo;
 
+        layout(std430, set = 0, binding = 2) readonly buffer InstanceBuffer {
+            InstanceData instances[];
+        };
+
         void main() {
-            mat4 instance_model = mat4(model_row0, model_row1, model_row2, model_row3);
+            InstanceData inst = instances[gl_InstanceIndex];
+            mat4 instance_model = inst.model;
             vec4 world_pos = instance_model * vec4(position, 1.0);
+            
             gl_Position = ubo.proj * ubo.view * world_pos;
-            v_pos = world_pos.xyz; 
-            v_color = instance_color; 
-            v_normal = mat3(instance_model) * normal; 
-            v_mat_data = instance_mat_props;
+            
+            v_pos = world_pos.xyz;
+            v_color = inst.color;
+            
+            mat3 normal_matrix = transpose(inverse(mat3(instance_model)));
+            v_normal = normal_matrix * normal;
+            
+            v_mat_data = inst.mat_props;
             v_uv = uv;
+            v_emissive = inst.emissive;
+
+            v_screen_uv = (gl_Position.xy / gl_Position.w) * 0.5 + 0.5;
         }
         "
     }
@@ -48,8 +65,10 @@ pub mod fs {
             layout(location = 0) in vec3 v_color;
             layout(location = 1) in vec3 v_normal;
             layout(location = 2) in vec3 v_pos;
-            layout(location = 3) in vec4 v_mat_data; 
+            layout(location = 3) in vec4 v_mat_data;
             layout(location = 4) in vec2 v_uv;
+            layout(location = 5) in float v_emissive;
+            layout(location = 6) in vec2 v_screen_uv;
 
             layout(set = 0, binding = 0) uniform UniformBufferObject {
                 mat4 view;
@@ -67,11 +86,18 @@ pub mod fs {
             layout(location = 0) out vec4 f_color;
 
             void main() {
+                if (v_emissive > 0.5) {
+                    vec3 result = v_color * 1.5;
+                    result = vec3(1.0) - exp(-result * 1.2); 
+                    f_color = vec4(result, 1.0);
+                    return;
+                }
+
                 vec4 tex_raw = texture(tex_sampler, v_uv);
                 vec3 base_color = v_color * tex_raw.rgb;
-                
-                float roughness = clamp(v_mat_data.x, 0.05, 1.0); // Roughness
-                float metalness = v_mat_data.y;                 // Metalness
+
+                float roughness = clamp(v_mat_data.x, 0.05, 1.0);
+                float metalness = v_mat_data.y;
 
                 vec3 N = normalize(v_normal);
                 vec3 V = normalize(ubo.eye_pos - v_pos);
@@ -79,7 +105,7 @@ pub mod fs {
                 vec3 H = normalize(V + L);
 
                 float dist = length(ubo.light_pos - v_pos);
-                float attenuation = ubo.light_intensity / (dist * dist + 1.0);
+                float attenuation = ubo.light_intensity / (1.0 + 0.005 * dist * dist);
                 vec3 radiance = ubo.light_color * attenuation;
 
                 vec3 f0 = mix(vec3(0.04), base_color, metalness);
@@ -88,7 +114,7 @@ pub mod fs {
 
                 float ndotl = max(dot(N, L), 0.0);
                 float ndotv = max(dot(N, V), 0.0);
-                
+
                 float alpha = roughness * roughness;
                 float alpha2 = alpha * alpha;
                 float ndoth = max(dot(N, H), 0.0);
@@ -103,12 +129,21 @@ pub mod fs {
                 vec3 kD = (vec3(1.0) - kS) * (1.0 - metalness);
                 vec3 diffuse = kD * base_color / 3.14159;
 
-                vec3 result = (diffuse + specular) * radiance * ndotl;
-                
-                result += vec3(0.03) * base_color;
+                vec3 ambient = 0.05 * base_color;
 
-                result = result / (result + vec3(1.0));
-                result = pow(result, vec3(1.0/2.2));
+                vec3 lighting = (diffuse + specular) * radiance * ndotl;
+                vec3 result = ambient + lighting;
+
+                float fog_dist = length(ubo.eye_pos - v_pos);
+                float fog = exp(-0.002 * fog_dist); 
+                result = mix(vec3(0.02, 0.02, 0.03), result, clamp(fog, 0.0, 1.0));
+
+                vec2 center_dist = v_screen_uv - 0.5;
+                float vignette = 1.0 - dot(center_dist, center_dist) * 1.2;
+                result *= clamp(vignette, 0.0, 1.0);
+
+                float exposure = 1.2;
+                result = vec3(1.0) - exp(-result * exposure);
 
                 f_color = vec4(result, tex_raw.a);
             }
