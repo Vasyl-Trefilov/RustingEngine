@@ -3,13 +3,20 @@ pub mod object;
 
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
+use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator};
+use vulkano::device::Queue;
+use vulkano::format::Format;
+use vulkano::image::ImmutableImage;
+use vulkano::image::view::ImageView;
 use vulkano::memory::allocator::{StandardMemoryAllocator, MemoryUsage, AllocationCreateInfo};
 use vulkano::pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint};
+use vulkano::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode};
+use vulkano::sync::GpuFuture;
 use rayon::prelude::*;
 
-use crate::scene::object::{RenderBatch, Instance, InstanceData};
+use crate::scene::object::{RenderBatch, Instance, InstanceData, Texture};
 use crate::scene::animation::AnimationType;
 use crate::renderer::pipeline::UniformBufferObject;
 use crate::shapes::Mesh;
@@ -21,12 +28,14 @@ pub struct RenderScene {
     pub light_pos: [f32; 3],
     pub light_color: [f32; 3],
     pub light_intensity: f32,
+    pub texture_views: Vec<Arc<ImageView<ImmutableImage>>>,
+    pub texture_sampler: Arc<Sampler>,
+    pub descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
 }
 
 pub struct FrameData {
     pub instance_buffer: Subbuffer<[InstanceData]>,
     pub uniform_buffer: Subbuffer<UniformBufferObject>,
-    pub descriptor_set: Arc<PersistentDescriptorSet>,
 }
 
 #[derive(Clone, Copy)]
@@ -76,12 +85,25 @@ impl RenderScene {
     // ! This is important part, the 'max_instances' is not so cool, I will try to rewrite it 
     pub fn new(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        descriptor_set_allocator: &StandardDescriptorSetAllocator,
-        pipeline: &Arc<GraphicsPipeline>,
+        descriptor_set_allocator: &Arc<StandardDescriptorSetAllocator>,
+        _pipeline: &Arc<GraphicsPipeline>,
+        queue: &Arc<Queue>,
         frames_in_flight: usize,
         max_instances: usize
     ) -> Self {
         let mut frames = Vec::new();
+        let default_texture = Self::create_texture_image(memory_allocator, queue, &[255, 255, 255, 255], 1, 1);
+        let default_texture_view = ImageView::new_default(default_texture).unwrap();
+        let texture_sampler = Sampler::new(
+            queue.device().clone(),
+            SamplerCreateInfo {
+                mag_filter: Filter::Linear,
+                min_filter: Filter::Linear,
+                mipmap_mode: SamplerMipmapMode::Linear,
+                address_mode: [SamplerAddressMode::Repeat; 3],
+                ..Default::default()
+            },
+        ).unwrap();
 
         for _ in 0..frames_in_flight {
             let instance_buffer = Buffer::new_slice::<InstanceData>(
@@ -110,15 +132,9 @@ impl RenderScene {
                 UniformBufferObject::default()
             ).unwrap();
     
-            let descriptor_set = PersistentDescriptorSet::new(
-                descriptor_set_allocator,
-                pipeline.layout().set_layouts()[0].clone(),
-                [WriteDescriptorSet::buffer(0, uniform_buffer.clone())]
-            ).unwrap();
             frames.push(FrameData {
                 instance_buffer,
                 uniform_buffer,
-                descriptor_set,
             });
         }
 
@@ -128,6 +144,79 @@ impl RenderScene {
             light_pos: [0.0, 10.0, 0.0], 
             light_color: [1.0, 1.0, 1.0],
             light_intensity: 50.0,
+            texture_views: vec![default_texture_view],
+            texture_sampler,
+            descriptor_set_allocator: descriptor_set_allocator.clone(),
+        }
+    }
+
+    fn create_texture_image(
+        memory_allocator: &Arc<StandardMemoryAllocator>,
+        queue: &Arc<Queue>,
+        pixels_rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Arc<ImmutableImage> {
+        let cb_allocator = StandardCommandBufferAllocator::new(
+            queue.device().clone(),
+            StandardCommandBufferAllocatorCreateInfo::default(),
+        );
+        let mut upload_builder = AutoCommandBufferBuilder::primary(
+            &cb_allocator,
+            queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        ).unwrap();
+        let image = ImmutableImage::from_iter::<u8, _, _, _>(
+            memory_allocator.as_ref(),
+            pixels_rgba.iter().copied(),
+            vulkano::image::ImageDimensions::Dim2d {
+                width,
+                height,
+                array_layers: 1,
+            },
+            vulkano::image::MipmapsCount::One,
+            Format::R8G8B8A8_SRGB,
+            &mut upload_builder,
+        ).unwrap();
+        let upload_cmd = upload_builder.build().unwrap();
+        vulkano::sync::now(queue.device().clone())
+            .then_execute(queue.clone(), upload_cmd)
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
+        image
+    }
+
+    fn to_rgba8(tex: &Texture) -> Vec<u8> {
+        match tex.pixels.len() as u32 {
+            len if len == tex.width * tex.height * 4 => tex.pixels.clone(),
+            len if len == tex.width * tex.height * 3 => {
+                let mut out = Vec::with_capacity((tex.width * tex.height * 4) as usize);
+                for rgb in tex.pixels.chunks_exact(3) {
+                    out.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+                out
+            }
+            _ => vec![255, 255, 255, 255],
+        }
+    }
+
+    pub fn set_textures(
+        &mut self,
+        textures: &[Texture],
+        queue: &Arc<Queue>,
+        memory_allocator: &Arc<StandardMemoryAllocator>,
+    ) {
+        for tex in textures {
+            if tex.width == 0 || tex.height == 0 {
+                continue;
+            }
+            let pixels_rgba = Self::to_rgba8(tex);
+            let image = Self::create_texture_image(memory_allocator, queue, &pixels_rgba, tex.width, tex.height);
+            let view = ImageView::new_default(image).unwrap();
+            self.texture_views.push(view);
         }
     }
 
@@ -211,10 +300,7 @@ impl RenderScene {
                         model: inst.model_matrix, 
                         color: inst.color, 
                         padding: 0.0, 
-                        roughness: inst.roughness, 
-                        specular_strength: inst.specular_strength, 
-                        shininess: inst.shininess,
-                        metalness: inst.metalness,
+                        mat_props: [inst.roughness, inst.metalness, 0.0, 0.0],
                  };
                     current_instance += 1;
                 }
@@ -233,11 +319,28 @@ impl RenderScene {
                 frame.instance_buffer.clone(),
             ));
             
+            let texture_index = batch
+                .mesh
+                .base_color_texture
+                .filter(|idx| *idx < self.texture_views.len())
+                .unwrap_or(0);
+            let descriptor_set = PersistentDescriptorSet::new(
+                self.descriptor_set_allocator.as_ref(),
+                pipeline.layout().set_layouts()[0].clone(),
+                [
+                    WriteDescriptorSet::buffer(0, frame.uniform_buffer.clone()),
+                    WriteDescriptorSet::image_view_sampler(
+                        1,
+                        self.texture_views[texture_index].clone(),
+                        self.texture_sampler.clone(),
+                    ),
+                ],
+            ).unwrap();
             builder.bind_descriptor_sets(
                 PipelineBindPoint::Graphics,
                 pipeline.layout().clone(),
                 0,
-                frame.descriptor_set.clone(),
+                descriptor_set,
             );
             
             if let Some(indices) = &batch.mesh.indices {

@@ -92,7 +92,8 @@ pub fn create_fountain(scene: &mut RenderScene, triangle: Mesh, count: u32, sett
             animation: fountain_logic.clone(),
             velocity: [angle.cos() * speed, 0.1 + rng.random_range(0.0..0.1), angle.sin() * speed],
             color: s.color,
-            metalness: 0.8, shininess: 4.0, ..Default::default()
+            metalness: 0.8, 
+            ..Default::default()
         });
         handles.push(handle);
     }
@@ -134,7 +135,8 @@ pub fn create_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Op
             original_position: base_pos,
             animation: fire_logic.clone(),
             velocity: [0.0, rng.random_range(0.05..0.1), 0.0],
-            color, metalness: 0.8, shininess: 4.0, ..Default::default()
+            color, metalness: 0.8,
+            ..Default::default()
         });
         handles.push(handle);
     }
@@ -170,7 +172,8 @@ pub fn create_void_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, setting
             animation: fire_logic.clone(),
             velocity: [0.0, rng.random_range(0.04..0.1), 0.0],
             color: [1.0, 1.0, 1.0],
-            metalness: 1.0, shininess: 128.0, specular_strength: 0.8, ..Default::default()
+            metalness: 1.0, 
+            ..Default::default()
         });
         handles.push(handle);
     }
@@ -232,9 +235,7 @@ pub fn create_event_horizon(scene: &mut RenderScene, mesh: Mesh, count: u32, set
             animation: vortex_logic.clone(),
             color: color,
             metalness: 1.0,        
-            roughness: 0.05,      
-            specular_strength: 1.0,
-            shininess: 64.0,       
+            roughness: 0.05,        
             ..Default::default()
         });
         handles.push(handle);

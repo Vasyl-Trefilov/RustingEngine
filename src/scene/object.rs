@@ -1,6 +1,8 @@
 use crate::shapes::Mesh;
 use crate::scene::animation::AnimationType;
 use nalgebra::{Matrix4, Rotation3, Vector3};
+use vulkano::image::{ImageAccess, view::ImageView};
+use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -8,10 +10,7 @@ pub struct InstanceData {
     pub model: [[f32; 4]; 4], // 64 bytes
     pub color: [f32; 3], // 12 bytes
     pub padding: f32,   // hahaha, so basically, this shit is useless, but we need it, bc I said(we really need it to keep data in 16 bytes for GPU)
-    pub shininess: f32, // 4 bytes (Total 80)
-    pub specular_strength: f32, // 4 bytes
-    pub roughness: f32, // 4 bytes
-    pub metalness: f32, // 4 bytes
+    pub mat_props: [f32; 4], // [roughness, metalness, reserved, reserved]
     // Total 96, perfect for GPU, bc 96 mod 16 is 0
 }
 
@@ -19,10 +18,10 @@ pub struct InstanceData {
 pub struct Instance {
     pub transform: Transform,
     pub color: [f32; 3],
-    pub shininess: f32,          
-    pub specular_strength: f32,  
     pub roughness: f32,    
     pub metalness: f32,
+    pub base_color_texture: Option<usize>,
+    pub metallic_roughness_texture: Option<usize>,
     pub animation: AnimationType,
     pub model_matrix: [[f32; 4]; 4],
     pub original_position: [f32; 3],
@@ -38,14 +37,19 @@ impl Default for Instance {
             velocity: [0.0, 0.0, 0.0],
             model_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], 
             color: [1.0, 1.0, 1.0],
-            specular_strength: 0.5,
-            shininess: 32.0,
+            base_color_texture: None,
+            metallic_roughness_texture: None,
             roughness: 0.5,
             metalness: 0.5
         }
     }
 }
 
+pub struct Texture {
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
 
 // ! TRANSFORM - Position, rotation, and scale of an object
 #[derive(Copy, Clone, Debug)]

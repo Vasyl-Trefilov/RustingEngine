@@ -32,7 +32,7 @@ use crate::scene::object::Transform;
 use crate::renderer::pipeline::create_pipeline;
 use crate::renderer::render::process_render;
 use crate::renderer::render::create_builder;
-use crate::shapes::gltfLoader::{load_gltf_mesh, load_gltf_scene};
+use crate::shapes::gltfLoader::{load_gltf_scene};
 use crate::shapes::shapes::{create_sphere_subdivided, create_triangle};
 use crate::effects::{RainSettings, SphereSettings, create_event_horizon, create_fire, create_fountain, create_monochrome_rain, create_nebula_sphere, create_void_fire};
 use crate::scene::InstanceHandle;
@@ -72,29 +72,29 @@ fn main() {
 
     let memory_allocator: std::sync::Arc<vulkano::memory::allocator::StandardMemoryAllocator> = 
         std::sync::Arc::new(vulkano::memory::allocator::StandardMemoryAllocator::new_default(base.device.clone()));
-    let descriptor_set_allocator: StandardDescriptorSetAllocator = StandardDescriptorSetAllocator::new(base.device.clone());
+    let descriptor_set_allocator: Arc<StandardDescriptorSetAllocator> = Arc::new(StandardDescriptorSetAllocator::new(base.device.clone()));
 
     // * Inputs
     let mut mouse_state = MouseState::default();
     // let mut prev_mouse_state = MouseState::default();
-    let mut inputs = InputState{speed: 0.1, ..Default::default()};
+    let mut inputs = InputState{speed: 0.01, ..Default::default()};
 
     // * Scene
-    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, 3, 1_000_000);
+    let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, &base.queue, 3, 1_000_000);
     let mut camera = Camera {
         position: [0.0, 0.0, 10.0],
         yaw: -90.0f32.to_radians(),
         pitch: 0.0,
     };
-    scene.set_light([20.0, 20.0, 20.0], [1.0, 1.0, 1.0], 1000.0);
+    scene.set_light([20.0, 20.0, 20.0], [1.0, 1.0, 1.0], 10000.0);
     let mut rng = rand::rng();
     let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
 
-    // let objects = load_gltf_scene(&memory_allocator, "./testModels/chillGuyWithMat.gltf"); // ! 3D MODELS IMPORT, LETS GO
-
-    // for (mesh, instance) in objects {
-    //     scene.add_instance(mesh, instance);
-    // }
+    let (objects, textures) = load_gltf_scene(&memory_allocator, "./testModels/Rustyball.gltf"); // ! 3D MODELS IMPORT, LETS GO
+    scene.set_textures(&textures, &base.queue, &memory_allocator);
+    for (mesh, instance) in objects {
+        scene.add_instance(mesh, instance);
+    }
 
     // create_star_sphere(&mut scene, triangle.clone(), 10000); // * this is the main performance check, just bc why not
     // create_fountain(&mut scene, triangle.clone(), 500);
@@ -106,7 +106,6 @@ fn main() {
     
     let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0,1.0,1.0], 3);
     
-
     // * So I dont want to lie, this spheres was created by gemini, bc why not? 
     // // 1. POLISHED COPPER (High Metalness + Low Roughness)
     // let handle = scene.add_instance(
@@ -129,9 +128,7 @@ fn main() {
     //     sphere_sub_mesh.clone(), 
     //     Instance {
     //         transform: Transform { position: [-3.6, 0.0, 0.0], ..Default::default() },
-    //         color: [0.97, 0.97, 0.98],        
-    //         shininess: 1000.0,               // Reflection is a tiny, sharp pixel point
-    //         specular_strength: 1.0,          
+    //         color: [0.97, 0.97, 0.98],           
     //         roughness: 0.0,                  // Perfectly smooth
     //         metalness: 1.0,                  // Reflects light source perfectly
     //         ..Default::default()
@@ -256,24 +253,24 @@ fn main() {
                         inputs.is_mouse_dragging = state == winit::event::ElementState::Pressed;
                     }
                     if button == winit::event::MouseButton::Right {
-                        effect_handlers.sort_by(|a, b| {
-                            b.batch_index.cmp(&a.batch_index)
-                                .then(b.instance_index.cmp(&a.instance_index))
-                        });
-                        for handle in &effect_handlers {
-                            scene.remove_instance(*handle);
-                        }
-                        effect_handlers.clear();
-                        match effect{
-                            0=>effect_handlers = create_monochrome_rain(&mut scene, triangle.clone(), 3000, Some(RainSettings{speed: 0.01, ..Default::default()})),
-                            1=>effect_handlers = create_fountain(&mut scene, triangle.clone(), 500, None),
-                            2=>effect_handlers = create_fire(&mut scene, triangle.clone(), 4000, None),
-                            3=>effect_handlers = create_void_fire(&mut scene, triangle.clone(), 3000, None),
-                            4=>effect_handlers = create_nebula_sphere(&mut scene, triangle.clone(), 3000, None),
-                            5=>effect_handlers = create_event_horizon(&mut scene, triangle.clone(), 3000, Some(SphereSettings{center: [0.0,0.0,0.0], radius: 20.0, random_color: true, ..Default::default()})),
-                            _=>effect=-1
-                    } 
-                    effect+=1;
+                    //     effect_handlers.sort_by(|a, b| {
+                    //         b.batch_index.cmp(&a.batch_index)
+                    //             .then(b.instance_index.cmp(&a.instance_index))
+                    //     });
+                    //     for handle in &effect_handlers {
+                    //         scene.remove_instance(*handle);
+                    //     }
+                    //     effect_handlers.clear();
+                    //     match effect{
+                    //         0=>effect_handlers = create_monochrome_rain(&mut scene, triangle.clone(), 3000, Some(RainSettings{speed: 0.01, ..Default::default()})),
+                    //         1=>effect_handlers = create_fountain(&mut scene, triangle.clone(), 500, None),
+                    //         2=>effect_handlers = create_fire(&mut scene, triangle.clone(), 4000, None),
+                    //         3=>effect_handlers = create_void_fire(&mut scene, triangle.clone(), 3000, None),
+                    //         4=>effect_handlers = create_nebula_sphere(&mut scene, triangle.clone(), 3000, None),
+                    //         5=>effect_handlers = create_event_horizon(&mut scene, triangle.clone(), 3000, Some(SphereSettings{center: [0.0,0.0,0.0], radius: 20.0, random_color: true, ..Default::default()})),
+                    //         _=>effect=-1
+                    // } 
+                    // effect+=1;
                     }
                      
                 }, 

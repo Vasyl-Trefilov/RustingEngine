@@ -29,7 +29,7 @@ pub struct VertexPosColorUv {
     #[format(R32G32B32_SFLOAT)]
     pub position: [f32; 3],   // XYZ position
     #[format(R32G32B32_SFLOAT)]
-    pub color: [f32; 3],       // RGB color
+    pub normal: [f32; 3],       // Normals
     #[format(R32G32_SFLOAT)]
     pub uv: [f32; 2],          // Texture coordinates
 }
@@ -55,17 +55,18 @@ impl VertexType for VertexPosColorNormal {}
 // ! MESH - Container for vertex and index data on the GPU
 #[derive(Clone)]
 pub struct Mesh {
-    pub vertices: Subbuffer<[VertexPosColorNormal]>,   // GPU buffer of vertices
+    pub vertices: Subbuffer<[VertexPosColorUv]>,   // GPU buffer of vertices
     pub indices: Option<Subbuffer<[u32]>>,       // Optional index buffer (for reuse)
     pub vertex_count: u32,                        // Number of vertices
     pub index_count: u32,                          // Number of indices (if using)
+    pub base_color_texture: Option<usize>,
 }
 
 impl Mesh {
     // * Create a new mesh from CPU-side data
     pub fn new(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        vertices: &[VertexPosColorNormal],
+        vertices: &[VertexPosColorUv],
         indices: Option<&[u32]>,
     ) -> Self {
         // Upload vertices to GPU
@@ -108,13 +109,14 @@ impl Mesh {
             indices: index_buffer,
             vertex_count,
             index_count,
+            base_color_texture: None,
         }
     }
 
     // * Create a mesh with indexed geometry (more efficient for complex shapes)
     pub fn new_indexed(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        vertices: &[VertexPosColorNormal],
+        vertices: &[VertexPosColorUv],
         indices: &[u32],
     ) -> Self {
         Self::new(memory_allocator, vertices, Some(indices))
@@ -155,51 +157,51 @@ pub mod shapes {
 
 
     // Helper function to add a triangle with barycentric coordinates
-    fn add_triangle(vertices: &mut Vec<VertexPosColorNormal>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], color: [f32; 3]) {
+    fn add_triangle(vertices: &mut Vec<VertexPosColorUv>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], color: [f32; 3]) {
         // Calculate face normal
         let normal = calculate_normal(p1, p2, p3);
         
-        vertices.push(VertexPosColorNormal { position: p1, color, normal, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: p2, color, normal, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: p3, color, normal, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorUv { position: p1,  normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: p2,  normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: p3,  normal, uv: [1.0,1.0] });
     }
 
     // * Wrong Normal triangle
-    fn add_wrong_triangle(vertices: &mut Vec<VertexPosColorNormal>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], color: [f32; 3]) {
+    fn add_wrong_triangle(vertices: &mut Vec<VertexPosColorUv>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], color: [f32; 3]) {
         // Calculate face normal
         let mut normal = calculate_normal(p1, p2, p3);
         normal[0] *= -1.0; 
         normal[1] *= -1.0;
         normal[2] *= -1.0;
-        vertices.push(VertexPosColorNormal { position: p1, color, normal, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: p2, color, normal, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: p3, color, normal, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorUv { position: p1,  normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: p2,  normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: p3,  normal, uv: [1.0,1.0] });
     }
 
     // Helper function to add a quad as two triangles
     // I dont know who will use it, maybe some chill guy                      or lady....
-        fn add_quad(vertices: &mut Vec<VertexPosColorNormal>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], p4: [f32; 3], color: [f32; 3]) {
+        fn add_quad(vertices: &mut Vec<VertexPosColorUv>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], p4: [f32; 3], color: [f32; 3]) {
         // Calculate normal for first triangle
         let normal1 = calculate_normal(p1, p2, p3);
         // Calculate normal for second triangle
         let normal2 = calculate_normal(p3, p4, p1);
         
         // First triangle
-        vertices.push(VertexPosColorNormal { position: p1, color, normal: normal1, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: p2, color, normal: normal1, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: p3, color, normal: normal1, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorUv { position: p1,  normal: normal1, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: p2,  normal: normal1, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: p3,  normal: normal1, uv: [1.0,1.0] });
         
         // Second triangle
-        vertices.push(VertexPosColorNormal { position: p3, color, normal: normal2, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: p4, color, normal: normal2, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: p1, color, normal: normal2, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorUv { position: p3,  normal: normal2, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: p4,  normal: normal2, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: p1,  normal: normal2, uv: [1.0,1.0] });
     }
 
     pub fn create_triangle(
         memory_allocator: &Arc<StandardMemoryAllocator>,
         color: [f32; 3],
     ) -> Mesh {
-        let mut vertices: Vec<VertexPosColorNormal> = Vec::new();
+        let mut vertices: Vec<VertexPosColorUv> = Vec::new();
 
         let v = [
             [-0.5, -0.5,  0.0], [0.5, -0.5,  0.0], [0.0,  0.5,  0.0]
@@ -216,7 +218,7 @@ pub mod shapes {
         memory_allocator: &Arc<StandardMemoryAllocator>,
         color: [f32; 3],
     ) -> Mesh {
-        let mut vertices: Vec<VertexPosColorNormal> = Vec::new();
+        let mut vertices: Vec<VertexPosColorUv> = Vec::new();
 
         let v = [
             [-0.5, -0.5,  0.5], [0.5, -0.5,  0.5], [0.5,  0.5,  0.5], [-0.5,  0.5,  0.5],
@@ -255,7 +257,7 @@ pub mod shapes {
         memory_allocator: &Arc<StandardMemoryAllocator>,
         color: [f32; 3],
     ) -> Mesh {
-        let mut vertices: Vec<VertexPosColorNormal> = Vec::new();
+        let mut vertices: Vec<VertexPosColorUv> = Vec::new();
 
         let v = [
             [-0.5, -0.5,  0.5], [0.5, -0.5,  0.5], [0.5,  0.5,  0.5], [-0.5,  0.5,  0.5],
@@ -315,11 +317,11 @@ pub mod shapes {
                 // For smooth shading, normal is the normalized position vector
                 let normal = normalize([x, y, z]);
                 
-                vertices.push(VertexPosColorNormal { 
+                vertices.push(VertexPosColorUv { 
                     position: [x, y, z], 
-                    color,
+                    
                     normal,
-                    barycentric: [1.0, 0.0, 0.0] 
+                    uv: [1.0,1.0] 
                 });
             }
         }
@@ -445,9 +447,9 @@ pub mod shapes {
             let v2_normal = v2_pos;
             let v3_normal = v3_pos;
             
-            final_vertices.push(VertexPosColorNormal { position: v1_pos, color, normal: v1_normal, barycentric: [1.0, 0.0, 0.0] });
-            final_vertices.push(VertexPosColorNormal { position: v2_pos, color, normal: v2_normal, barycentric: [0.0, 1.0, 0.0] });
-            final_vertices.push(VertexPosColorNormal { position: v3_pos, color, normal: v3_normal, barycentric: [0.0, 0.0, 1.0] });
+            final_vertices.push(VertexPosColorUv { position: v1_pos,  normal: v1_normal, uv: [1.0,1.0] });
+            final_vertices.push(VertexPosColorUv { position: v2_pos,  normal: v2_normal, uv: [1.0,1.0] });
+            final_vertices.push(VertexPosColorUv { position: v3_pos,  normal: v3_normal, uv: [1.0,1.0] });
         }
 
         Mesh::new(memory_allocator, &final_vertices, None)
@@ -697,13 +699,13 @@ pub mod shapes {
             let normal = normalize([circle_points[current_idx][0], circle_points[current_idx][1], 0.0]);
             
             // Add triangles with proper normals
-            vertices.push(VertexPosColorNormal { position: p1, color, normal, barycentric: [1.0, 0.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p2, color, normal, barycentric: [0.0, 1.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p3, color, normal, barycentric: [0.0, 0.0, 1.0] });
+            vertices.push(VertexPosColorUv { position: p1,  normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p2,  normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p3,  normal, uv: [1.0,1.0] });
             
-            vertices.push(VertexPosColorNormal { position: p3, color, normal, barycentric: [1.0, 0.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p4, color, normal, barycentric: [0.0, 1.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p1, color, normal, barycentric: [0.0, 0.0, 1.0] });
+            vertices.push(VertexPosColorUv { position: p3,  normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p4,  normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p1,  normal, uv: [1.0,1.0] });
         }
 
         // Top cap (triangles from center) - normal points up (+Y)
@@ -715,9 +717,9 @@ pub mod shapes {
             let p2 = [circle_points[current_idx][0], circle_points[current_idx][1], half_height];
             let p3 = [circle_points[next_i][0], circle_points[next_i][1], half_height];
 
-            vertices.push(VertexPosColorNormal { position: p1, color, normal: top_normal, barycentric: [1.0, 0.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p2, color, normal: top_normal, barycentric: [0.0, 1.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p3, color, normal: top_normal, barycentric: [0.0, 0.0, 1.0] });
+            vertices.push(VertexPosColorUv { position: p1,  normal: top_normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p2,  normal: top_normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p3,  normal: top_normal, uv: [1.0,1.0] });
         }
 
         // Bottom cap (triangles from center) - normal points down (-Y)
@@ -730,9 +732,9 @@ pub mod shapes {
             let p2 = [circle_points[current_idx][0], circle_points[current_idx][1], -half_height];
             let p3 = [circle_points[next_i][0], circle_points[next_i][1], -half_height];
 
-            vertices.push(VertexPosColorNormal { position: p1, color, normal: bottom_normal, barycentric: [1.0, 0.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p2, color, normal: bottom_normal, barycentric: [0.0, 1.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p3, color, normal: bottom_normal, barycentric: [0.0, 0.0, 1.0] });
+            vertices.push(VertexPosColorUv { position: p1,  normal: bottom_normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p2,  normal: bottom_normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p3,  normal: bottom_normal, uv: [1.0,1.0] });
         }
 
         Mesh::new(memory_allocator, &vertices, None)
@@ -773,9 +775,9 @@ pub mod shapes {
             // Calculate normal for side face
             let side_normal = calculate_normal(p1, p2, p3);
             
-            vertices.push(VertexPosColorNormal { position: p1, color, normal: side_normal, barycentric: [1.0, 0.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p2, color, normal: side_normal, barycentric: [0.0, 1.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p3, color, normal: side_normal, barycentric: [0.0, 0.0, 1.0] });
+            vertices.push(VertexPosColorUv { position: p1,  normal: side_normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p2,  normal: side_normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p3,  normal: side_normal, uv: [1.0,1.0] });
         }
 
         // Bottom cap (triangles from center) - normal points down (-Y)
@@ -787,9 +789,9 @@ pub mod shapes {
             let p2 = [circle_points[current_idx][0], circle_points[current_idx][1], -half_height];
             let p3 = [circle_points[next_i][0], circle_points[next_i][1], -half_height];
 
-            vertices.push(VertexPosColorNormal { position: p1, color, normal: bottom_normal, barycentric: [1.0, 0.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p2, color, normal: bottom_normal, barycentric: [0.0, 1.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: p3, color, normal: bottom_normal, barycentric: [0.0, 0.0, 1.0] });
+            vertices.push(VertexPosColorUv { position: p1,  normal: bottom_normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p2,  normal: bottom_normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: p3,  normal: bottom_normal, uv: [1.0,1.0] });
         }
 
         Mesh::new(memory_allocator, &vertices, None)
@@ -814,12 +816,12 @@ pub mod shapes {
         let normal = [0.0, 0.0, 1.0];
 
         let vertices = vec![
-            VertexPosColorNormal { position: v0, color, normal, barycentric: [1.0, 0.0, 0.0] },
-            VertexPosColorNormal { position: v1, color, normal, barycentric: [0.0, 1.0, 0.0] },
-            VertexPosColorNormal { position: v2, color, normal, barycentric: [0.0, 0.0, 1.0] },
-            VertexPosColorNormal { position: v2, color, normal, barycentric: [1.0, 0.0, 0.0] },
-            VertexPosColorNormal { position: v3, color, normal, barycentric: [0.0, 1.0, 0.0] },
-            VertexPosColorNormal { position: v0, color, normal, barycentric: [0.0, 0.0, 1.0] },
+            VertexPosColorUv { position: v0,  normal, uv: [1.0,1.0] },
+            VertexPosColorUv { position: v1,  normal, uv: [1.0,1.0] },
+            VertexPosColorUv { position: v2,  normal, uv: [1.0,1.0] },
+            VertexPosColorUv { position: v2,  normal, uv: [1.0,1.0] },
+            VertexPosColorUv { position: v3,  normal, uv: [1.0,1.0] },
+            VertexPosColorUv { position: v0,  normal, uv: [1.0,1.0] },
         ];
 
         Mesh::new(memory_allocator, &vertices, None)
@@ -842,15 +844,15 @@ pub mod shapes {
         // Lines along X axis
         for i in 0..=divisions {
             let x = -half + i as f32 * step;
-            vertices.push(VertexPosColorNormal { position: [x, -half, 0.0], color, normal, barycentric: [1.0, 0.0, 0.0] });
-            vertices.push(VertexPosColorNormal { position: [x, half, 0.0], color, normal, barycentric: [0.0, 1.0, 0.0] });
+            vertices.push(VertexPosColorUv { position: [x, -half, 0.0],  normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: [x, half, 0.0],  normal, uv: [1.0,1.0] });
         }
 
         // Lines along Y axis
         for i in 0..=divisions {
             let y = -half + i as f32 * step;
-            vertices.push(VertexPosColorNormal { position: [-half, y, 0.0], color, normal, barycentric: [0.0, 0.0, 1.0] });
-            vertices.push(VertexPosColorNormal { position: [half, y, 0.0], color, normal, barycentric: [1.0, 0.0, 0.0] });
+            vertices.push(VertexPosColorUv { position: [-half, y, 0.0],  normal, uv: [1.0,1.0] });
+            vertices.push(VertexPosColorUv { position: [half, y, 0.0],  normal, uv: [1.0,1.0] });
         }
 
         Mesh::new(memory_allocator, &vertices, None)
@@ -879,13 +881,13 @@ pub mod shapes {
         // Base (two triangles) - normal points down (-Z)
         let base_normal = [0.0, 0.0, -1.0];
         
-        vertices.push(VertexPosColorNormal { position: b1, color, normal: base_normal, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b2, color, normal: base_normal, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b3, color, normal: base_normal, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorUv { position: b1,  normal: base_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b2,  normal: base_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b3,  normal: base_normal, uv: [1.0,1.0] });
         
-        vertices.push(VertexPosColorNormal { position: b3, color, normal: base_normal, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b4, color, normal: base_normal, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b1, color, normal: base_normal, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorUv { position: b3,  normal: base_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b4,  normal: base_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b1,  normal: base_normal, uv: [1.0,1.0] });
 
         // Four sides - calculate normals for each face
         let side1_normal = calculate_normal(apex, b1, b2);
@@ -894,24 +896,24 @@ pub mod shapes {
         let side4_normal = calculate_normal(apex, b4, b1);
 
         // Side 1
-        vertices.push(VertexPosColorNormal { position: apex, color, normal: side1_normal, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b1, color, normal: side1_normal, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b2, color, normal: side1_normal, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorUv { position: apex,  normal: side1_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b1,  normal: side1_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b2,  normal: side1_normal, uv: [1.0,1.0] });
 
         // Side 2
-        vertices.push(VertexPosColorNormal { position: apex, color, normal: side2_normal, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b2, color, normal: side2_normal, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b3, color, normal: side2_normal, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorUv { position: apex,  normal: side2_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b2,  normal: side2_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b3,  normal: side2_normal, uv: [1.0,1.0] });
 
         // Side 3
-        vertices.push(VertexPosColorNormal { position: apex, color, normal: side3_normal, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b3, color, normal: side3_normal, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b4, color, normal: side3_normal, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorUv { position: apex,  normal: side3_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b3,  normal: side3_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b4,  normal: side3_normal, uv: [1.0,1.0] });
 
         // Side 4
-        vertices.push(VertexPosColorNormal { position: apex, color, normal: side4_normal, barycentric: [1.0, 0.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b4, color, normal: side4_normal, barycentric: [0.0, 1.0, 0.0] });
-        vertices.push(VertexPosColorNormal { position: b1, color, normal: side4_normal, barycentric: [0.0, 0.0, 1.0] });
+        vertices.push(VertexPosColorUv { position: apex,  normal: side4_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b4,  normal: side4_normal, uv: [1.0,1.0] });
+        vertices.push(VertexPosColorUv { position: b1,  normal: side4_normal, uv: [1.0,1.0] });
 
         Mesh::new(memory_allocator, &vertices, None)
     }

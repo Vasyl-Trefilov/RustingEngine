@@ -1,6 +1,6 @@
 use vulkano::pipeline::graphics::vertex_input::VertexInputState;
 use vulkano::pipeline::graphics::vertex_input::VertexInputBindingDescription;
-use crate::VertexPosColorNormal;
+use crate::{VertexPosColorNormal, shapes::VertexPosColorUv};
 use vulkano::pipeline::graphics::vertex_input::VertexInputRate;
 use crate::InstanceData;
 use vulkano::pipeline::graphics::vertex_input::VertexInputAttributeDescription;
@@ -15,7 +15,7 @@ pub struct UniformBufferObject {
     pub eye_pos: [f32; 3],         // 12 bytes
     pub padding_1: f32,            // 4 bytes 
     pub light_pos: [f32; 3],       // 12 bytes
-    pub padding_2: f32,            // 4 bytes 
+    pub padding_2: f32,            // 4 bytes
     pub light_color: [f32; 3],     // 12 bytes
     pub light_intensity: f32,      // 4 bytes
 }
@@ -37,7 +37,7 @@ impl Default for UniformBufferObject {
 pub fn create_vertex_input_state() -> VertexInputState {
     VertexInputState::new()
     .binding(0, VertexInputBindingDescription {
-        stride: std::mem::size_of::<VertexPosColorNormal>() as u32, // this might be 48 bytes, I guess, bc I have [[f32; 3], 4] in this color
+        stride: std::mem::size_of::<VertexPosColorUv>() as u32, // this might be 48 bytes, I guess, bc I have [[f32; 3], 4] in this color, not valid shit already
         input_rate: VertexInputRate::Vertex,
     })
     .binding(1, VertexInputBindingDescription {
@@ -47,22 +47,17 @@ pub fn create_vertex_input_state() -> VertexInputState {
     .attribute(0, VertexInputAttributeDescription {
         binding: 0,
         format: Format::R32G32B32_SFLOAT,
-        offset: 0,
+        offset: 0, // position
     })
     .attribute(1, VertexInputAttributeDescription {
         binding: 0,
         format: Format::R32G32B32_SFLOAT,
-        offset: 12,
+        offset: 12, // normal
     })
-    .attribute(2,VertexInputAttributeDescription {
+    .attribute(2, VertexInputAttributeDescription {
         binding: 0,
-        format: Format::R32G32B32_SFLOAT,
-        offset: 24,
-    })
-    .attribute(3, VertexInputAttributeDescription {
-        binding: 0, 
-        format: Format::R32G32B32_SFLOAT, 
-        offset: 36,
+        format: Format::R32G32_SFLOAT,
+        offset: 24, // uv
     })
     .attribute(4,VertexInputAttributeDescription {
         binding: 1,
