@@ -89,7 +89,9 @@ pub fn create_fountain(scene: &mut RenderScene, triangle: Mesh, count: u32, sett
             animation: fountain_logic.clone(),
             velocity: [angle.cos() * speed, 0.1 + rng.random_range(0.0..0.1), angle.sin() * speed],
             color: s.color,
-            metalness: 0.8, 
+            metalness: 0.0,   
+            roughness: 0.05,
+            emissive: 0.0,
             ..Default::default()
         });
         handles.push(handle);
@@ -132,7 +134,9 @@ pub fn create_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Op
             original_position: base_pos,
             animation: fire_logic.clone(),
             velocity: [0.0, rng.random_range(0.05..0.1), 0.0],
-            color, metalness: 0.8,
+            color, 
+            emissive: 1.0,
+            metalness: 0.0, 
             ..Default::default()
         });
         handles.push(handle);
@@ -260,7 +264,7 @@ pub fn create_monochrome_rain(scene: &mut RenderScene, mesh: Mesh, count: u32, s
             transform: Transform { position: pos, ..Default::default() },
             animation: rain_logic.clone(),
             velocity: [0.0, rng.random_range(s.speed..s.speed * 2.0), 0.0],
-            color: [0.7, 0.8, 1.0], roughness: 1.0, ..Default::default()
+            color: [0.7, 0.8, 1.0], roughness: 0.1, emissive: 1.0, metalness: 1.0, ..Default::default()
         });
     handles.push(handle);
     }

@@ -18,18 +18,24 @@ use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemo
 use vulkano::pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint};
 use vulkano::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode};
 use vulkano::sync::GpuFuture;
+use vulkano::pipeline::ComputePipeline;
+use crate::scene::object::PhysicsPushConstants;
+use vulkano::render_pass::Framebuffer;
+use vulkano::command_buffer::RenderPassBeginInfo;
+use vulkano::command_buffer::SubpassContents;
+use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::DeviceSize;
 use rayon::prelude::*;
 
 use crate::input::MouseState;
-use crate::renderer::frustum::{frustum_planes, sphere_visible, view_proj_matrix};
+// use crate::renderer::frustum::{frustum_planes, sphere_visible, view_proj_matrix};
 use crate::renderer::pipeline::UniformBufferObject;
 use crate::scene::animation::AnimationType;
 use crate::scene::object::{Instance, InstanceData, RenderBatch, Texture};
 use crate::shapes::Mesh;
 
 pub struct RenderScene {
-    pub max_instances: usize,
+    // pub max_instances: usize,
     pub batches: Vec<RenderBatch>,
     pub frames: Vec<FrameData>,
     pub light_pos: [f32; 3],
@@ -38,16 +44,14 @@ pub struct RenderScene {
     pub texture_views: Vec<Arc<ImageView<ImmutableImage>>>,
     pub texture_sampler: Arc<Sampler>,
     pub descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
-    descriptor_sets: Vec<Vec<Arc<PersistentDescriptorSet>>>,
+    pub descriptor_sets: Vec<Vec<Arc<PersistentDescriptorSet>>>,
+    pub physics_read: Subbuffer<[InstanceData]>,
+    pub physics_write: Subbuffer<[InstanceData]>,
+    pub total_instances: u32,
 }
 
 pub struct FrameData {
-    pub instance_staging: Subbuffer<[InstanceData]>,
-    pub instance_device: Subbuffer<[InstanceData]>,
     pub uniform_buffer: Subbuffer<UniformBufferObject>,
-    pub instance_scratch: Vec<InstanceData>,
-    pub visible_instance_count: u32,
-    pub batch_visible_counts: Vec<u32>, // * Visible instance count per batch index (matches `batches` order).
 }
 
 #[derive(Clone, Copy)]
@@ -116,100 +120,168 @@ impl RenderScene {
         )
         .unwrap();
 
+        let physics_read = Buffer::new_slice::<InstanceData>(  
+            memory_allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST | BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::DeviceOnly,
+                ..Default::default()
+            },
+            max_instances as u64, ).unwrap();
+        let physics_write = Buffer::new_slice::<InstanceData>(  
+            memory_allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST | BufferUsage::TRANSFER_SRC, 
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::DeviceOnly,
+                ..Default::default()
+            },
+            max_instances as u64, ).unwrap();
+
         for _ in 0..frames_in_flight {
-            let instance_staging = Buffer::new_slice::<InstanceData>(
-                memory_allocator,
-                BufferCreateInfo {
-                    usage: BufferUsage::TRANSFER_SRC,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    usage: MemoryUsage::Upload,
-                    ..Default::default()
-                },
-                max_instances as u64,
-            )
-            .unwrap();
-
-            let instance_device = Buffer::new_slice::<InstanceData>(
-                memory_allocator,
-                BufferCreateInfo {
-                    usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    usage: MemoryUsage::DeviceOnly,
-                    ..Default::default()
-                },
-                max_instances as u64,
-            )
-            .unwrap();
-
             let uniform_buffer = Buffer::from_data(
                 memory_allocator,
-                BufferCreateInfo {
-                    usage: BufferUsage::UNIFORM_BUFFER,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    usage: MemoryUsage::Upload,
-                    ..Default::default()
-                },
+                BufferCreateInfo { usage: BufferUsage::UNIFORM_BUFFER, ..Default::default() },
+                AllocationCreateInfo { usage: MemoryUsage::Upload, ..Default::default() },
                 UniformBufferObject::default(),
-            )
-            .unwrap();
+            ).unwrap();
 
-            let mut instance_scratch = Vec::new();
-            instance_scratch.reserve_exact(max_instances);
-
-            frames.push(FrameData {
-                instance_staging,
-                instance_device,
-                uniform_buffer,
-                instance_scratch,
-                visible_instance_count: 0,
-                batch_visible_counts: Vec::new(),
-            });
+            frames.push(FrameData { uniform_buffer });
         }
 
         let mut scene = Self {
-            max_instances,
             batches: Vec::new(),
             frames,
-            light_pos: [0.0, 10.0, 0.0],
-            light_color: [1.0, 1.0, 1.0],
-            light_intensity: 50.0,
-            texture_views: vec![default_texture_view],
-            texture_sampler,
+            light_pos:[0.0, 10.0, 0.0], light_color: [1.0, 1.0, 1.0], light_intensity: 50.0,
+            texture_views: vec![/* default view */],
+            texture_sampler, 
             descriptor_set_allocator: descriptor_set_allocator.clone(),
             descriptor_sets: vec![Vec::new(); frames_in_flight],
+            // physics_buffer,
+            total_instances: 0,
+            physics_read,
+            physics_write,
         };
-
-        scene.ensure_descriptor_cache(pipeline, scene.texture_views.len());
         scene
     }
 
-    fn ensure_descriptor_cache(&mut self, pipeline: &Arc<GraphicsPipeline>, target_texture_count: usize) {
+    pub fn upload_to_gpu(&mut self, allocator: &Arc<StandardMemoryAllocator>, queue: &Arc<Queue>) {
+        let mut flat_data = Vec::new();
+        for batch in &self.batches {
+            for inst in &batch.instances {
+                flat_data.push(InstanceData {
+                    model: inst.model_matrix,
+                    color: [inst.color[0], inst.color[1], inst.color[2], inst.emissive],
+                    mat_props:[inst.roughness, inst.metalness, 0.0, 0.0],
+                    velocity: inst.velocity,
+                });
+            }
+        }
+        self.total_instances = flat_data.len() as u32;
+        if self.total_instances == 0 { return; }
+
+        let staging = Buffer::from_iter(
+            allocator,
+            BufferCreateInfo { usage: BufferUsage::TRANSFER_SRC, ..Default::default() },
+            AllocationCreateInfo { usage: MemoryUsage::Upload, ..Default::default() },
+            flat_data,
+        ).unwrap();
+
+        let mut builder = AutoCommandBufferBuilder::primary(
+            &StandardCommandBufferAllocator::new(queue.device().clone(), Default::default()),
+            queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        ).unwrap();
+
+        builder.copy_buffer(CopyBufferInfoTyped::buffers(
+            staging.clone(),
+            self.physics_read.clone().slice(0..self.total_instances as u64)
+        )).unwrap();builder.copy_buffer(CopyBufferInfoTyped::buffers(
+            staging,
+            self.physics_write.clone().slice(0..self.total_instances as u64)
+        )).unwrap();
+
+        let cmd = builder.build().unwrap();
+        vulkano::sync::now(queue.device().clone())
+            .then_execute(queue.clone(), cmd).unwrap()
+            .then_signal_fence_and_flush().unwrap()
+            .wait(None).unwrap();
+    }
+
+    pub fn ensure_descriptor_cache(&mut self, pipeline: &Arc<GraphicsPipeline>, target_count: usize) {
         let layout = pipeline.layout().set_layouts()[0].clone();
         for (frame_i, frame) in self.frames.iter().enumerate() {
-            while self.descriptor_sets[frame_i].len() < target_texture_count {
+            while self.descriptor_sets[frame_i].len() < target_count {
                 let tex_i = self.descriptor_sets[frame_i].len();
                 let set = PersistentDescriptorSet::new(
                     self.descriptor_set_allocator.as_ref(),
-                    layout.clone(),
-                    [
-                        WriteDescriptorSet::buffer(0, frame.uniform_buffer.clone()),
-                        WriteDescriptorSet::image_view_sampler(
-                            1,
-                            self.texture_views[tex_i].clone(),
-                            self.texture_sampler.clone(),
-                        ),
-                        WriteDescriptorSet::buffer(2, frame.instance_device.clone()),
+                    layout.clone(),[
+                        WriteDescriptorSet::buffer(0, frame.uniform_buffer.clone()), 
+                        WriteDescriptorSet::image_view_sampler(1, self.texture_views[tex_i].clone(), self.texture_sampler.clone()),
+                        WriteDescriptorSet::buffer(2, self.physics_read.clone())
+
                     ],
-                )
-                .unwrap();
+                ).unwrap();
                 self.descriptor_sets[frame_i].push(set);
             }
+        }
+    }
+
+    pub fn prepare_frame_ubo(&mut self, frame_index: usize, view: [[f32; 4]; 4], proj: [[f32; 4]; 4], eye_pos:[f32; 3]) {
+        let mut ubo = self.frames[frame_index].uniform_buffer.write().unwrap();
+        ubo.view = view; ubo.proj = proj; ubo.eye_pos = eye_pos;
+        ubo.light_pos = self.light_pos; ubo.light_color = self.light_color; ubo.light_intensity = self.light_intensity;
+    }
+
+    pub fn record_draws(
+        &mut self,
+        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        pipeline: &Arc<GraphicsPipeline>,
+        frame_index: usize,
+    ) {
+        let mut current_offset = 0;
+        
+        for batch in &self.batches {
+            let count = batch.instances.len() as u32;
+            if count == 0 { continue; }
+
+            builder.bind_vertex_buffers(0, (batch.mesh.vertices.clone(),));
+            
+            let requested_tex = batch.mesh.base_color_texture.unwrap_or(0);
+            let available_textures = self.descriptor_sets[frame_index].len();
+            let tex_idx = requested_tex.min(available_textures.saturating_sub(1));
+
+            builder.bind_descriptor_sets(
+                PipelineBindPoint::Graphics, 
+                pipeline.layout().clone(), 
+                0, 
+                self.descriptor_sets[frame_index][tex_idx].clone()
+            );
+
+            if let Some(indices) = &batch.mesh.indices {
+                builder.bind_index_buffer(indices.clone());
+                builder.draw_indexed(
+                    batch.mesh.index_count, 
+                    count, 
+                    0, 
+                    0, 
+                    current_offset
+                ).unwrap();
+            } else {
+                builder.draw(
+                    batch.mesh.vertex_count, 
+                    count, 
+                    0, 
+                    current_offset
+                ).unwrap();
+            }
+            
+            current_offset += count;
         }
     }
 
@@ -287,188 +359,62 @@ impl RenderScene {
         self.ensure_descriptor_cache(pipeline, self.texture_views.len());
     }
 
-    pub fn update(&mut self, elapsed: f32, _mouse: &MouseState) {
-        for batch in &mut self.batches {
-            batch.instances.par_iter_mut().for_each(|inst| {
-                match &inst.animation {
-                    AnimationType::Custom(logic) => {
-                        logic(
-                            &mut inst.transform,
-                            &mut inst.velocity,
-                            &mut inst.original_position,
-                            &mut inst.color,
-                            elapsed,
-                        );
-                    }
-                    AnimationType::Rotate => {
-                        inst.transform.rotation[0] = elapsed * 0.2;
-                        inst.transform.rotation[1] = elapsed * 0.2;
-                    }
-                    _ => {}
-                }
-
-                inst.model_matrix = inst.transform.to_matrix();
-            });
-        }
-    }
-
-    // * CPU work: UBO, frustum culling, parallel instance packing, staging buffer write.
-    pub fn prepare_frame(
-        &mut self,
-        frame_index: usize,
-        view: [[f32; 4]; 4],
-        proj: [[f32; 4]; 4],
-        eye_pos: [f32; 3],
-    ) {
-        let max_instances = self.max_instances;
-        let frame = &mut self.frames[frame_index];
-        let total_instances: usize = self.batches.iter().map(|b| b.instances.len()).sum();
-        if total_instances == 0 {
-            frame.visible_instance_count = 0;
-            frame.batch_visible_counts.clear();
-            return;
-        }
-
-        {
-            let mut ubo_data = frame.uniform_buffer.write().unwrap();
-            ubo_data.view = view;
-            ubo_data.proj = proj;
-            ubo_data.eye_pos = eye_pos;
-            ubo_data.light_pos = self.light_pos;
-            ubo_data.light_color = self.light_color;
-            ubo_data.light_intensity = self.light_intensity;
-        }
-
-        let vp = view_proj_matrix(&view, &proj);
-        let planes = frustum_planes(&vp);
-
-        frame.instance_scratch.clear();
-        frame.batch_visible_counts.resize(self.batches.len(), 0);
-
-        for (bi, batch) in self.batches.iter().enumerate() {
-            if batch.instances.is_empty() {
-                continue;
-            }
-            let chunk: Vec<InstanceData> = batch
-                .instances
-                .par_iter()
-                .filter(|inst| {
-                    let s = inst.transform.scale;
-                    let r = s[0].max(s[1]).max(s[2]) * 1.5;
-                    sphere_visible(&planes, inst.transform.position, r)
-                })
-                .map(|inst| InstanceData {
-                    model: inst.model_matrix,
-                    color: inst.color,
-                    emissive: inst.emissive,
-                    mat_props: [inst.roughness, inst.metalness, 0.0, 0.0],
-                })
-                .collect();
-            frame.batch_visible_counts[bi] = chunk.len() as u32;
-            frame.instance_scratch.extend(chunk);
-        }
-
-        let visible = frame.instance_scratch.len();
-        assert!(visible <= max_instances);
-        frame.visible_instance_count = visible as u32;
-
-        if visible == 0 {
-            return;
-        }
-
-        let mut staging = frame.instance_staging.write().unwrap();
-        staging[..visible].copy_from_slice(&frame.instance_scratch[..visible]);
-    }
-
-    // * GPU transfer: staging → device instance buffer + barriers.
-    pub fn record_instance_transfer(
-        &mut self,
-        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        frame_index: usize,
-    ) {
-        let frame = &self.frames[frame_index];
-        let visible = frame.visible_instance_count as usize;
-        if visible == 0 {
-            return;
-        }
-
-        let mut copy_info = CopyBufferInfoTyped::buffers(
-            frame.instance_staging.clone(),
-            frame.instance_device.clone(),
-        );
-        copy_info.regions[0].size = visible as DeviceSize;
-        builder.copy_buffer(CopyBufferInfo::from(copy_info)).unwrap();
-    }
-
-    pub fn record_draws(
-        &mut self,
-        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        pipeline: &Arc<GraphicsPipeline>,
-        frame_index: usize,
-    ) {
-        let visible_total = self.frames[frame_index].visible_instance_count;
-        if visible_total == 0 {
-            return;
-        }
-
-        let counts = self.frames[frame_index].batch_visible_counts.clone();
-
-        let mut current_instance_offset: u32 = 0;
-        for (bi, batch) in self.batches.iter().enumerate() {
-            if batch.instances.is_empty() {
-                continue;
-            }
-
-            let visible_in_batch = *counts.get(bi).unwrap_or(&0);
-            if visible_in_batch == 0 {
-                continue;
-            }
-
-            builder.bind_vertex_buffers(0, (batch.mesh.vertices.clone(),));
-
-            let texture_index = batch
-                .mesh
-                .base_color_texture
-                .filter(|idx| *idx < self.texture_views.len())
-                .unwrap_or(0);
-            let descriptor_set = self.descriptor_sets[frame_index][texture_index].clone();
-
-            builder.bind_descriptor_sets(
-                PipelineBindPoint::Graphics,
-                pipeline.layout().clone(),
-                0,
-                descriptor_set,
-            );
-
-            if let Some(indices) = &batch.mesh.indices {
-                builder.bind_index_buffer(indices.clone());
-                builder
-                    .draw_indexed(
-                        batch.mesh.index_count,
-                        visible_in_batch,
-                        0,
-                        0,
-                        current_instance_offset,
-                    )
-                    .unwrap();
-            } else {
-                builder
-                    .draw(
-                        batch.mesh.vertex_count,
-                        visible_in_batch,
-                        0,
-                        current_instance_offset,
-                    )
-                    .unwrap();
-            }
-
-            current_instance_offset += visible_in_batch;
-        }
-    }
-
     pub fn set_light(&mut self, position: [f32; 3], color: [f32; 3], intensity: f32) {
         self.light_pos = position;
         self.light_color = color;
         self.light_intensity = intensity;
     }
+}
+
+pub fn record_compute_physics(
+    builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, 
+    compute_pipeline: &Arc<ComputePipeline>,
+    compute_set: &Arc<PersistentDescriptorSet>,
+    total_objects: u32,
+    dt: f32
+) {
+    let workgroups_x = (total_objects + 255) / 256;
+    builder
+        .bind_pipeline_compute(compute_pipeline.clone())
+        .bind_descriptor_sets(
+            PipelineBindPoint::Compute, 
+            compute_pipeline.layout().clone(), 
+            0, 
+            compute_set.clone()
+        )
+        .push_constants(
+            compute_pipeline.layout().clone(), 
+            0, 
+            PhysicsPushConstants { dt, object_count: total_objects }
+        )
+        .dispatch([workgroups_x, 1, 1])
+        .unwrap();
+
+}
+
+pub fn begin_render_pass_only(
+    builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, 
+    framebuffers: &[Arc<Framebuffer>], 
+    img_index: u32, 
+    dims: [u32; 2], 
+    pipeline: &Arc<GraphicsPipeline>
+) {
+    builder
+        .begin_render_pass(
+            RenderPassBeginInfo {
+                clear_values: vec![
+                    Some([0.01, 0.01, 0.02, 1.0].into()), // Dark blue clear
+                    Some(1.0.into()),
+                ],
+                ..RenderPassBeginInfo::framebuffer(framebuffers[img_index as usize].clone())
+            },
+            SubpassContents::Inline,
+        )
+        .unwrap() 
+        .set_viewport(0, vec![Viewport {
+            origin: [0.0, 0.0],
+            dimensions: [dims[0] as f32, dims[1] as f32],
+            depth_range: 0.0..1.0,
+        }])
+        .bind_pipeline_graphics(pipeline.clone());
 }

@@ -3,7 +3,8 @@ mod scene;
 mod input;
 mod shaders;
 mod shapes;
-mod effects;
+mod build;
+// mod effects;
 
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
@@ -14,6 +15,17 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use vulkano::swapchain::Swapchain;
 use vulkano::image::ImageUsage;
 use vulkano::swapchain::PresentMode;
+use vulkano::pipeline::ComputePipeline;
+use vulkano::descriptor_set::PersistentDescriptorSet;
+use vulkano::descriptor_set::WriteDescriptorSet;
+use vulkano::pipeline::Pipeline;
+use std::f32::consts::PI;
+use std::fmt::format;
+use vulkano::swapchain::CompositeAlpha;
+use vulkano::sync::PipelineStages;
+use vulkano::sync::AccessFlags;
+
+
 use crate::scene::animation::AnimationType;
 use std::sync::Arc;
 use crate::renderer::swapchain::{create_framebuffers, create_render_pass, create_swapchain_and_images};
@@ -22,22 +34,23 @@ use crate::shapes::VertexPosColorNormal;
 use std::{panic};
 use rand::*;
 use crate::renderer::camera::{Camera, camera_rotate, create_look_at, create_projection_matrix};
-use crate::scene::RenderScene;
+use crate::scene::{RenderScene};
 use crate::input::{InputState, MouseState, set_mouse_capture};
 use crate::scene::object::InstanceData;
 use crate::shaders::vs;
 use crate::shaders::fs;
-use crate::scene::object::Instance;
+use crate::scene::object::{Instance};
 use crate::scene::object::Transform;
 use crate::renderer::pipeline::create_pipeline;
 use crate::renderer::render::process_render;
 use crate::renderer::render::create_builder;
 use crate::shapes::gltfLoader::{load_gltf_scene};
-use crate::shapes::shapes::{create_sphere_subdivided, create_triangle};
-use crate::effects::{RainSettings, SphereSettings, create_event_horizon, create_fire, create_fountain, create_monochrome_rain, create_nebula_sphere, create_void_fire};
-use crate::scene::InstanceHandle;
+use crate::shapes::shapes::{create_cube, create_plane, create_sphere_subdivided, create_triangle};
+// use crate::effects::{RainSettings, SphereSettings, create_event_horizon, create_fire, create_fountain, create_monochrome_rain, create_nebula_sphere, create_void_fire};
+use crate::scene::{InstanceHandle, record_compute_physics, begin_render_pass_only};
 
 fn main() {
+
     let event_loop = EventLoop::new();
     let dims = [1920, 1080]; // Placeholder dimensions for projection matrix
     let aspect = dims[0] as f32 / dims[1] as f32;
@@ -64,8 +77,19 @@ fn main() {
     let vs = vs::load(base.device.clone()).unwrap();
     let fs = fs::load(base.device.clone()).unwrap();
 
-    let (mut swapchain, images) = create_swapchain_and_images(&base.device, &base.surface, &base.window);
-
+    let (mut swapchain, images) = Swapchain::new(
+        base.device.clone(),
+        base.surface.clone(),
+        SwapchainCreateInfo {
+            min_image_count: 3, // Triple buffering
+            image_format: None,
+            image_extent: dims,
+            image_usage: ImageUsage::COLOR_ATTACHMENT,
+            composite_alpha: CompositeAlpha::Opaque,
+            present_mode: PresentMode::Fifo, 
+            ..Default::default()
+        },
+    ).unwrap();
     let render_pass = create_render_pass(base.device.clone(), &swapchain);
     // ! GRAPHICS PIPELINE - The complete configuration for drawing
     let pipeline = create_pipeline(vs, fs, &render_pass, &base.device);
@@ -80,50 +104,59 @@ fn main() {
     let mut inputs = InputState{speed: 0.1, ..Default::default()};
     let mut rng = rand::rng();
     let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
+    let cube = create_plane(&memory_allocator, [0.0,0.0,0.0], 10.0, 10.0);
 
     // * Scene
     let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, &base.queue, 3, 1_000_000); // 1_000_000
     let mut camera = Camera {
-        position: [0.0, 0.0, 20.0],
+        position: [0.0, 20.0, 20.0],
         yaw: 90.0f32.to_radians(), 
         pitch: 0.0,
     };
-    scene.set_light([30.0, 30.0, 30.0],[1.0, 0.95, 0.9], 15.0); 
+    scene.set_light([30.0, 30.0, 30.0],[1.0, 0.95, 0.9], 150.0); 
     
-    let (objects, textures) = load_gltf_scene(&memory_allocator, "./testModels/1kRustingSphere.gltf"); // ! 3D MODELS IMPORT, LETS GO
+    let (objects, textures) = load_gltf_scene(&memory_allocator, "./testModels/1kRustingSphere.gltf");
     scene.set_textures(&pipeline, &textures, &base.queue, &memory_allocator);
+
     for (mesh, mut instance) in objects {
-        instance.emissive = 0.5;
-        instance.roughness = 0.5;
-        instance.metalness = 0.5;
-        // instance.transform.uniform_scale(4.0);
-        // scene.add_instance(mesh.clone(), instance.clone());
-        for i in 0..10 {
-            for j in 0..10 {
-                for k in 0..10 {
-                    instance.transform.position[0] = i as f32 * -2.5;
-                    instance.transform.position[1] = j as f32 * -2.5;
-                    instance.transform.position[2] = k as f32 * -2.5;
-                    scene.add_instance(mesh.clone(), instance.clone());
-                }
-            }
+        instance.emissive = 0.0;    
+        instance.roughness = 0.85;  
+        instance.metalness = 0.15;    
+        
+        instance.velocity = [0.0, 3.0, 0.0, 1.0]; 
+
+        if instance.transform.position[1] < 1.0 {
+            instance.transform.position[1] = 1.0;
         }
+
+        instance.model_matrix = instance.transform.to_matrix();
+        scene.add_instance(mesh.clone(), instance.clone());
     }
-
-    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0,1.0,1.0], 3);
+    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0, 1.0, 1.0], 3);
     
-
     let handle = scene.add_instance(
         sphere_sub_mesh.clone(), 
         Instance {
-            transform: Transform { position: [20.0, 20.0, 20.0], scale: [4.0, 4.0, 4.0], ..Default::default() },
-            color: [1.0, 1.0, 0.0],        
-            roughness: 0.05,                 // Very smooth surface, mirror-like
-            metalness: 1.0,                  // 100% metal: light is tinted by the copper color
+            transform: Transform { position: [10.0, 20.0, 10.0], scale: [4.0, 4.0, 4.0], ..Default::default() },
+            color: [0.0, 1.0, 0.0],        
             emissive: 1.0,
+            velocity: [0.0, -5.0, 0.0, 4.0], 
+            model_matrix: Transform { position: [10.0, 40.0, 10.0], scale: [4.0, 4.0, 4.0], ..Default::default() }.to_matrix(),
             ..Default::default()
         }
     );
+    scene.add_instance(cube, 
+        Instance {
+            transform: Transform { position: [0.0, 0.0, 0.0], scale: [4.0, 4.0, 4.0], ..Default::default() },
+            color: [1.0, 1.0, 0.0],        
+            emissive: 1.0,
+            velocity: [0.0, 0.0, 0.0, 4.0], 
+            model_matrix: Transform { position: [10.0, 10.0, 10.0], scale: [4.0, 4.0, 4.0], rotation: [PI/2.0, 0.0,0.0],  ..Default::default() }.to_matrix(),
+            ..Default::default()
+        }
+    );
+
+
     // let stars_logic = AnimationType::Custom(Arc::new(|transform, _velocity, original_pos, color, elapsed| {
     //     let speed = 0.1; 
     //     let angle = elapsed * speed;
@@ -259,9 +292,32 @@ fn main() {
     //     }
     // );
 
+    scene.upload_to_gpu(&memory_allocator, &base.queue);
+    scene.ensure_descriptor_cache(&pipeline, scene.texture_views.len());
+    let compute_shader = shaders::cs::load(base.device.clone()).unwrap(); // pls recompile shader
+    let compute_pipeline = ComputePipeline::new(
+        base.device.clone(),
+        compute_shader.entry_point("main").unwrap(),
+        &(),
+        None,
+        |_| {}
+    ).unwrap();
+
+    let compute_layout = compute_pipeline.layout().set_layouts()[0].clone();
+    println!("{:#?}", compute_layout.bindings());
+    let mut compute_set = PersistentDescriptorSet::new(
+        &descriptor_set_allocator,
+        compute_layout.clone(),
+        [
+            WriteDescriptorSet::buffer(0, scene.physics_read.clone()), 
+            WriteDescriptorSet::buffer(1, scene.physics_write.clone()),
+            
+        ]
+    ).unwrap();
+
     let mut framebuffers = create_framebuffers(&images, &render_pass, &memory_allocator);
 
-    let mut previous_frame_end = Some(sync::now(base.device.clone()).boxed());
+    let mut previous_frame_end: Option<Box<dyn GpuFuture>> = Some(vulkano::sync::now(base.device.clone()).boxed());
     let mut recreate_swapchain = false;
     let mut frame_index = 3;
     // let start_time = std::time::Instant::now(); 
@@ -272,6 +328,12 @@ fn main() {
     let mut total_fps = 0;
     let mut effect = 0;
     let mut effect_handlers: Vec<InstanceHandle> = Vec::new();
+
+    // physic render
+    let mut last_frame_instant = std::time::Instant::now(); 
+    let mut accumulator = 0.0;
+    let fixed_dt = 1.0 / 60.0; 
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
@@ -320,7 +382,7 @@ fn main() {
                     if button == winit::event::MouseButton::Left {
                         inputs.is_mouse_dragging = state == winit::event::ElementState::Pressed;
                     }
-                    if button == winit::event::MouseButton::Right {
+                    // if button == winit::event::MouseButton::Right {
                     //     effect_handlers.sort_by(|a, b| {
                     //         b.batch_index.cmp(&a.batch_index)
                     //             .then(b.instance_index.cmp(&a.instance_index))
@@ -339,7 +401,7 @@ fn main() {
                     //         _=>effect=-1
                     // } 
                     // effect+=1;
-                    }
+                    // }
                      
                 }, 
                 WindowEvent::CursorMoved { position, .. } => {
@@ -359,7 +421,8 @@ fn main() {
                 _ => ()
             },
             Event::MainEventsCleared => {
-                previous_frame_end.as_mut().unwrap().cleanup_finished();
+                frame_index = (frame_index + 1) % 3;
+                
                 let elapsed = start_time.elapsed().as_secs_f32();
                 frame_count += 1;
                 let elapsed_fps = fps_timer.elapsed().as_secs_f32();
@@ -367,7 +430,6 @@ fn main() {
                 if elapsed_fps >= 2.0 {
                     let fps = frame_count as f32 / elapsed_fps;
                     println!("FPS: {:.0}", fps);
-                    // println!("FPS: {:.0}", elapsed);
                     total_fps += frame_count;
                     frame_count = 0;
                     fps_timer = std::time::Instant::now();
@@ -375,7 +437,14 @@ fn main() {
                         println!("middle Fps: {:.0}", (total_fps as f32 / elapsed));
                     }
                 }
-                frame_index = (frame_index + 1) % 3;
+                
+                let now = std::time::Instant::now();
+                let mut delta_time = now.duration_since(last_frame_instant).as_secs_f32();
+                last_frame_instant = now;
+
+                if delta_time > 0.05 { delta_time = 0.05; } 
+                accumulator += delta_time;
+
                 if recreate_swapchain {
                     let new_size = base.window.inner_size(); 
                     dims = [new_size.width, new_size.height]; 
@@ -401,36 +470,62 @@ fn main() {
                         Err(e) => panic!("{e}"),
                     };
 
-                if suboptimal { recreate_swapchain = true; }
+                view = camera_rotate(&mut camera, &inputs);
+                eye_pos = camera.position;
+                scene.prepare_frame_ubo(frame_index, view, proj, eye_pos);
 
                 let mut builder = create_builder(&cb_allocator, &base.queue);
 
-                view = camera_rotate(&mut camera, &inputs);
-                eye_pos = camera.position;
+                while accumulator >= fixed_dt {
+                    record_compute_physics(
+                            &mut builder, 
+                            &compute_pipeline, 
+                            &compute_set, 
+                            scene.total_instances, 
+                            fixed_dt 
+                        );
+                        std::mem::swap(&mut scene.physics_read, &mut scene.physics_write);
 
-                scene.update(elapsed, &mouse_state);
-                scene.prepare_frame(frame_index, view, proj, eye_pos);
-                scene.record_instance_transfer(&mut builder, frame_index);
+                        compute_set = PersistentDescriptorSet::new(
+                            &descriptor_set_allocator,
+                            compute_layout.clone(),
+                            [
+                                WriteDescriptorSet::buffer(0, scene.physics_read.clone()),
+                                WriteDescriptorSet::buffer(1, scene.physics_write.clone()),
+                            ],
+                        ).unwrap();
+                        accumulator -= fixed_dt;
+                }
 
-                process_render(&mut builder, &framebuffers, img_index, dims, &pipeline);
+                scene.descriptor_sets.iter_mut().for_each(|v| v.clear());
+                scene.ensure_descriptor_cache(&pipeline, scene.texture_views.len());
+                
+                begin_render_pass_only(&mut builder, &framebuffers, img_index, dims, &pipeline);
                 scene.record_draws(&mut builder, &pipeline, frame_index);
-
                 builder.end_render_pass().unwrap();
+                
                 let command_buffer = builder.build().unwrap();
 
-                // ! SUBMIT TO GPU - Send commands and present result
-                let future = previous_frame_end.take().unwrap().join(acquire_future)
+                // ! SUBMIT TO GPU 
+                // We use sync::now() here to break the infinite memory chain
+                let future = sync::now(base.device.clone())
+                    .join(acquire_future)
                     .then_execute(base.queue.clone(), command_buffer).unwrap()
                     .then_swapchain_present(base.queue.clone(), SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), img_index))
                     .then_signal_fence_and_flush();
 
                 match future {
-                    Ok(future) => previous_frame_end = Some(future.boxed()),
+                    Ok(f) => {
+                        previous_frame_end = Some(sync::now(base.device.clone()).boxed());
+                    }
                     Err(FlushError::OutOfDate) => { 
                         recreate_swapchain = true; 
                         previous_frame_end = Some(sync::now(base.device.clone()).boxed()); 
                     },
-                    Err(_) => previous_frame_end = Some(sync::now(base.device.clone()).boxed()),
+                    Err(e) => {
+                        println!("Flush error: {:?}", e);
+                        previous_frame_end = Some(sync::now(base.device.clone()).boxed());
+                    }
                 }
             },
             _ => ()

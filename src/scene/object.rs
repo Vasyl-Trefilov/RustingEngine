@@ -8,11 +8,17 @@ use std::sync::Arc;
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct InstanceData {
     pub model: [[f32; 4]; 4], // 64 bytes
-    pub color: [f32; 3], // 12 bytes
-    pub emissive: f32,        // 4 bytes
-    // pub padding: f32,   // hahaha, so basically, this shit is useless, but we need it, bc I said(we really need it to keep data in 16 bytes for GPU)
-    pub mat_props: [f32; 4], // [roughness, metalness, reserved, reserved]
-    // Total 96, perfect for GPU, bc 96 mod 16 is 0
+    pub color: [f32; 4],       // 16 bytes, color + emission 
+    pub mat_props: [f32; 4],  // 16 bytes
+    pub velocity:[f32; 4],   // 16 bytes (x, y, z, and w = collision radius)
+    // Total 112 bytes
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PhysicsPushConstants {
+    pub dt: f32,
+    pub object_count: u32,
 }
 
 #[derive(Clone)]
@@ -26,18 +32,16 @@ pub struct Instance {
     pub metallic_roughness_texture: Option<usize>,
     pub animation: AnimationType,
     pub model_matrix: [[f32; 4]; 4],
-    pub original_position: [f32; 3],
-    pub velocity: [f32; 3],
+    pub velocity: [f32; 4],
 }
 
 impl Default for Instance {
     fn default() -> Self {
         Self {
             transform: Transform::default(),
-            original_position: [0.0, 0.0, 0.0],
             animation: AnimationType::Static,
-            velocity: [0.0, 0.0, 0.0],
-            model_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], 
+            velocity:[0.0, 0.0, 0.0, 1.0],
+            model_matrix: [[1.0, 0.0, 0.0, 0.0],[0.0, 1.0, 0.0, 0.0],[0.0, 0.0, 1.0, 0.0],[0.0, 0.0, 0.0, 1.0]], 
             color: [1.0, 1.0, 1.0],
             emissive: 0.0,
             base_color_texture: None,
