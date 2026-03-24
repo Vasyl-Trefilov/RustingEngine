@@ -157,7 +157,7 @@ pub mod shapes {
 
 
     // Helper function to add a triangle with barycentric coordinates
-    fn add_triangle(vertices: &mut Vec<VertexPosColorUv>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], color: [f32; 3]) {
+    fn add_triangle(vertices: &mut Vec<VertexPosColorUv>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], ) {
         // Calculate face normal
         let normal = calculate_normal(p1, p2, p3);
         
@@ -167,7 +167,7 @@ pub mod shapes {
     }
 
     // * Wrong Normal triangle
-    fn add_wrong_triangle(vertices: &mut Vec<VertexPosColorUv>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], color: [f32; 3]) {
+    fn add_wrong_triangle(vertices: &mut Vec<VertexPosColorUv>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], ) {
         // Calculate face normal
         let mut normal = calculate_normal(p1, p2, p3);
         normal[0] *= -1.0; 
@@ -180,7 +180,7 @@ pub mod shapes {
 
     // Helper function to add a quad as two triangles
     // I dont know who will use it, maybe some chill guy                      or lady....
-        fn add_quad(vertices: &mut Vec<VertexPosColorUv>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], p4: [f32; 3], color: [f32; 3]) {
+        fn add_quad(vertices: &mut Vec<VertexPosColorUv>, p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], p4: [f32; 3], ) {
         // Calculate normal for first triangle
         let normal1 = calculate_normal(p1, p2, p3);
         // Calculate normal for second triangle
@@ -199,7 +199,7 @@ pub mod shapes {
 
     pub fn create_triangle(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
     ) -> Mesh {
         let mut vertices: Vec<VertexPosColorUv> = Vec::new();
 
@@ -208,7 +208,7 @@ pub mod shapes {
         ];
 
         // Normal for a flat triangle in XY plane
-        add_triangle(&mut vertices, v[0], v[1], v[2], color);
+        add_triangle(&mut vertices, v[0], v[1], v[2]);
 
         Mesh::new(memory_allocator, &vertices, None)
     }
@@ -216,7 +216,7 @@ pub mod shapes {
     // * Create a unit cube centered at origin
     pub fn create_cube(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        // 
     ) -> Mesh {
         let mut vertices: Vec<VertexPosColorUv> = Vec::new();
 
@@ -226,28 +226,28 @@ pub mod shapes {
         ];
 
         // Front face (+Z)
-        add_triangle(&mut vertices, v[0], v[1], v[2], color);
-        add_triangle(&mut vertices, v[2], v[3], v[0], color);
+        add_triangle(&mut vertices, v[0], v[1], v[2]);
+        add_triangle(&mut vertices, v[2], v[3], v[0]);
         
         // Right face (+X)
-        add_triangle(&mut vertices, v[1], v[5], v[6], color);
-        add_triangle(&mut vertices, v[6], v[2], v[1], color);
+        add_triangle(&mut vertices, v[1], v[5], v[6]);
+        add_triangle(&mut vertices, v[6], v[2], v[1]);
         
         // Back face (-Z)
-        add_triangle(&mut vertices, v[5], v[4], v[7], color);
-        add_triangle(&mut vertices, v[7], v[6], v[5], color);
+        add_triangle(&mut vertices, v[5], v[4], v[7]);
+        add_triangle(&mut vertices, v[7], v[6], v[5]);
         
         // Left face (-X)
-        add_triangle(&mut vertices, v[4], v[0], v[3], color);
-        add_triangle(&mut vertices, v[3], v[7], v[4], color);
+        add_triangle(&mut vertices, v[4], v[0], v[3]);
+        add_triangle(&mut vertices, v[3], v[7], v[4]);
         
         // Top face (+Y)
-        add_triangle(&mut vertices, v[3], v[2], v[6], color);
-        add_triangle(&mut vertices, v[6], v[7], v[3], color);
+        add_triangle(&mut vertices, v[3], v[2], v[6]);
+        add_triangle(&mut vertices, v[6], v[7], v[3]);
         
         // Bottom face (-Y)
-        add_triangle(&mut vertices, v[4], v[5], v[1], color);
-        add_triangle(&mut vertices, v[1], v[0], v[4], color);
+        add_triangle(&mut vertices, v[4], v[5], v[1]);
+        add_triangle(&mut vertices, v[1], v[0], v[4]);
 
         Mesh::new(memory_allocator, &vertices, None)
     }
@@ -255,7 +255,7 @@ pub mod shapes {
     // * Wrong Cube, to test normals
     pub fn create_wrong_cube(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
     ) -> Mesh {
         let mut vertices: Vec<VertexPosColorUv> = Vec::new();
 
@@ -265,28 +265,28 @@ pub mod shapes {
         ];
 
         // Front face (+Z)
-        add_wrong_triangle(&mut vertices, v[0], v[1], v[2], color);
-        add_wrong_triangle(&mut vertices, v[2], v[3], v[0], color);
+        add_wrong_triangle(&mut vertices, v[0], v[1], v[2]);
+        add_wrong_triangle(&mut vertices, v[2], v[3], v[0]);
         
         // Right face (+X)
-        add_wrong_triangle(&mut vertices, v[1], v[5], v[6], color);
-        add_wrong_triangle(&mut vertices, v[6], v[2], v[1], color);
+        add_wrong_triangle(&mut vertices, v[1], v[5], v[6]);
+        add_wrong_triangle(&mut vertices, v[6], v[2], v[1]);
         
         // Back face (-Z)
-        add_wrong_triangle(&mut vertices, v[5], v[4], v[7], color);
-        add_wrong_triangle(&mut vertices, v[7], v[6], v[5], color);
+        add_wrong_triangle(&mut vertices, v[5], v[4], v[7]);
+        add_wrong_triangle(&mut vertices, v[7], v[6], v[5]);
         
         // Left face (-X)
-        add_wrong_triangle(&mut vertices, v[4], v[0], v[3], color);
-        add_wrong_triangle(&mut vertices, v[3], v[7], v[4], color);
+        add_wrong_triangle(&mut vertices, v[4], v[0], v[3]);
+        add_wrong_triangle(&mut vertices, v[3], v[7], v[4]);
         
         // Top face (+Y)
-        add_wrong_triangle(&mut vertices, v[3], v[2], v[6], color);
-        add_wrong_triangle(&mut vertices, v[6], v[7], v[3], color);
+        add_wrong_triangle(&mut vertices, v[3], v[2], v[6]);
+        add_wrong_triangle(&mut vertices, v[6], v[7], v[3]);
         
         // Bottom face (-Y)
-        add_wrong_triangle(&mut vertices, v[4], v[5], v[1], color);
-        add_wrong_triangle(&mut vertices, v[1], v[0], v[4], color);
+        add_wrong_triangle(&mut vertices, v[4], v[5], v[1]);
+        add_wrong_triangle(&mut vertices, v[1], v[0], v[4]);
 
         Mesh::new(memory_allocator, &vertices, None)
     }
@@ -296,7 +296,7 @@ pub mod shapes {
     // ! DO NOT WRITE 16 OR 32, IT IS NOT TOTAL SUBDIVIDES!!!, write like 2-4 max
     pub fn create_sphere(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
         sectors: u32,
         stacks: u32,
     ) -> Mesh {
@@ -360,7 +360,7 @@ pub mod shapes {
     // * Create a sphere using icosahedron subdivision (better distribution)
     pub fn create_sphere_subdivided(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
         subdivisions: u32,
     ) -> Mesh {
         let t = (1.0 + (5.0_f32).sqrt()) / 2.0;
@@ -458,7 +458,7 @@ pub mod shapes {
     // * Create a tetrahedron
     pub fn create_tetrahedron(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
     ) -> Mesh {
         let mut vertices = Vec::new();
         let a = 0.5;
@@ -472,10 +472,10 @@ pub mod shapes {
         ];
 
         // Four faces (each triangle)
-        add_triangle(&mut vertices, v[0], v[1], v[2], color);
-        add_triangle(&mut vertices, v[0], v[2], v[3], color);
-        add_triangle(&mut vertices, v[0], v[3], v[1], color);
-        add_triangle(&mut vertices, v[1], v[3], v[2], color);
+        add_triangle(&mut vertices, v[0], v[1], v[2]);
+        add_triangle(&mut vertices, v[0], v[2], v[3]);
+        add_triangle(&mut vertices, v[0], v[3], v[1]);
+        add_triangle(&mut vertices, v[1], v[3], v[2]);
 
         Mesh::new(memory_allocator, &vertices, None)
     }
@@ -483,7 +483,7 @@ pub mod shapes {
     // * Create an octahedron
     pub fn create_octahedron(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
     ) -> Mesh {
         let mut vertices = Vec::new();
         let a = 0.5;
@@ -499,16 +499,16 @@ pub mod shapes {
         ];
 
         // Top half (4 triangles)
-        add_triangle(&mut vertices, v[4], v[0], v[2], color);
-        add_triangle(&mut vertices, v[4], v[2], v[1], color);
-        add_triangle(&mut vertices, v[4], v[1], v[3], color);
-        add_triangle(&mut vertices, v[4], v[3], v[0], color);
+        add_triangle(&mut vertices, v[4], v[0], v[2]);
+        add_triangle(&mut vertices, v[4], v[2], v[1]);
+        add_triangle(&mut vertices, v[4], v[1], v[3]);
+        add_triangle(&mut vertices, v[4], v[3], v[0]);
         
         // Bottom half (4 triangles)
-        add_triangle(&mut vertices, v[5], v[2], v[0], color);
-        add_triangle(&mut vertices, v[5], v[1], v[2], color);
-        add_triangle(&mut vertices, v[5], v[3], v[1], color);
-        add_triangle(&mut vertices, v[5], v[0], v[3], color);
+        add_triangle(&mut vertices, v[5], v[2], v[0]);
+        add_triangle(&mut vertices, v[5], v[1], v[2]);
+        add_triangle(&mut vertices, v[5], v[3], v[1]);
+        add_triangle(&mut vertices, v[5], v[0], v[3]);
 
         Mesh::new(memory_allocator, &vertices, None)
     }
@@ -516,7 +516,7 @@ pub mod shapes {
     // * Create a dodecahedron
     pub fn create_dodecahedron(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
     ) -> Mesh {
         let mut vertices = Vec::new();
         let phi = (1.0 + (5.0_f32).sqrt()) / 2.0; // Golden ratio
@@ -544,7 +544,7 @@ pub mod shapes {
         for face in faces.iter() {
             // Triangulate pentagon (fan from first vertex)
             for i in 1..(face.len() - 1) {
-                add_triangle(&mut vertices, v[face[0]], v[face[i]], v[face[i + 1]], color);
+                add_triangle(&mut vertices, v[face[0]], v[face[i]], v[face[i + 1]]);
             }
         }
 
@@ -554,7 +554,7 @@ pub mod shapes {
     // * Create an icosahedron
     pub fn create_icosahedron(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
     ) -> Mesh {
         let mut vertices = Vec::new();
         let phi = (1.0 + (5.0_f32).sqrt()) / 2.0;
@@ -579,7 +579,7 @@ pub mod shapes {
         ];
 
         for face in faces.iter() {
-            add_triangle(&mut vertices, v[face[0]], v[face[1]], v[face[2]], color);
+            add_triangle(&mut vertices, v[face[0]], v[face[1]], v[face[2]]);
         }
 
         Mesh::new(memory_allocator, &vertices, None)
@@ -588,7 +588,7 @@ pub mod shapes {
     // * Create a torus, this shit has sick formula
     pub fn create_torus(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
         major_radius: f32,
         minor_radius: f32,
         major_segments: u32,
@@ -640,8 +640,8 @@ pub mod shapes {
                 ];
 
                 // Create two triangles for the quad
-                add_triangle(&mut vertices, p1, p2, p3, color);
-                add_triangle(&mut vertices, p3, p4, p1, color); // ! Change to add_quad, but now right now, bc I dont want to
+                add_triangle(&mut vertices, p1, p2, p3);
+                add_triangle(&mut vertices, p3, p4, p1); // ! Change to add_quad, but now right now, bc I dont want to
             }
         }
 
@@ -651,7 +651,7 @@ pub mod shapes {
     // * Create a cylinder
     pub fn create_cylinder(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
         radius: f32,
         height: f32,
         sectors: u32,
@@ -743,7 +743,7 @@ pub mod shapes {
     // * Create a cone
     pub fn create_cone(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
         radius: f32,
         height: f32,
         sectors: u32,
@@ -800,7 +800,7 @@ pub mod shapes {
     // * Create a flat plane
     pub fn create_plane(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
         width: f32,
         height: f32,
     ) -> Mesh {
@@ -830,7 +830,7 @@ pub mod shapes {
     // * Create a grid of lines (useful for debugging/visualization)
     pub fn create_grid(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
         size: f32,
         divisions: u32,
     ) -> Mesh {
@@ -861,7 +861,7 @@ pub mod shapes {
     // * Create a pyramid (square base)
     pub fn create_pyramid(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        color: [f32; 3],
+        
         size: f32,
         height: f32,
     ) -> Mesh {

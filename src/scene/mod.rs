@@ -177,7 +177,8 @@ impl RenderScene {
                 flat_data.push(InstanceData {
                     model: inst.model_matrix,
                     color: [inst.color[0], inst.color[1], inst.color[2], inst.emissive],
-                    mat_props:[inst.roughness, inst.metalness, 0.0, 0.0],
+                    mat_props: [inst.roughness, inst.metalness, 0.0,0.0],
+                    physic: [inst.collision, inst.mass, inst.gravity, 0.0],
                     velocity: inst.velocity,
                 });
             }

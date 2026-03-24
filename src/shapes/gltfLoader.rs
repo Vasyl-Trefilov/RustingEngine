@@ -99,7 +99,7 @@ fn process_node(
             mesh.base_color_texture = base_color_texture.map(|idx| idx + 1);
 
 			let instance = Instance {
-                transform: Transform::from_matrix(global_transform),
+                model_matrix: Transform::from_matrix(global_transform).to_matrix(),
                 color,               
                 roughness,
                 metalness,

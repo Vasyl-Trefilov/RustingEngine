@@ -10,8 +10,9 @@ pub struct InstanceData {
     pub model: [[f32; 4]; 4], // 64 bytes
     pub color: [f32; 4],       // 16 bytes, color + emission 
     pub mat_props: [f32; 4],  // 16 bytes
-    pub velocity:[f32; 4],   // 16 bytes (x, y, z, and w = collision radius)
-    // Total 112 bytes
+    pub velocity: [f32; 4],   // 16 bytes z and w are not used now
+    pub physic: [f32; 4] // 16 bytes
+    // Total 124            bytes
 }
 
 #[repr(C)]
@@ -23,7 +24,6 @@ pub struct PhysicsPushConstants {
 
 #[derive(Clone)]
 pub struct Instance {
-    pub transform: Transform,
     pub color: [f32; 3],
     pub emissive: f32,
     pub roughness: f32,    
@@ -33,12 +33,14 @@ pub struct Instance {
     pub animation: AnimationType,
     pub model_matrix: [[f32; 4]; 4],
     pub velocity: [f32; 4],
+    pub mass: f32,
+    pub collision: f32,
+    pub gravity: f32,
 }
 
 impl Default for Instance {
     fn default() -> Self {
         Self {
-            transform: Transform::default(),
             animation: AnimationType::Static,
             velocity:[0.0, 0.0, 0.0, 1.0],
             model_matrix: [[1.0, 0.0, 0.0, 0.0],[0.0, 1.0, 0.0, 0.0],[0.0, 0.0, 1.0, 0.0],[0.0, 0.0, 0.0, 1.0]], 
@@ -47,7 +49,10 @@ impl Default for Instance {
             base_color_texture: None,
             metallic_roughness_texture: None,
             roughness: 0.5,
-            metalness: 0.5
+            metalness: 0.5,
+            mass: 1.0,
+            collision: 0.0,
+            gravity: 1.0,
         }
     }
 }

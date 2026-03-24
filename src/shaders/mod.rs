@@ -11,6 +11,7 @@ pub mod cs {
             vec4 color;
             vec4 mat_props;
             vec4 velocity;
+            vec4 physic;
         };
 
         layout(std430, set = 0, binding = 0) readonly buffer ReadBuffer {
@@ -33,41 +34,110 @@ pub mod cs {
             InstanceData me = read_buf.data[i];
             vec3 pos = me.model[3].xyz;
             vec3 vel = me.velocity.xyz;
+            float radius = me.velocity.w;
+            
+            float gravity_scale = me.physic.z; 
+            float type = me.physic.x;
+            float mass = max(me.physic.y, 0.1);
+            float dt = pc.dt;
 
-            pos += vel * pc.dt;
+            vel.y -= 90.8 * dt * gravity_scale; 
 
-            // Floor collision
-            if (pos.y < 0.5) {
-                pos.y = 0.5;
-                vel.y = -vel.y * 0.8; 
-            }
+            float damping = (gravity_scale == 0.0) ? 0.5 : 0.1;
+            vel *= (1.0 - damping * dt);
+            
+            pos += vel * dt;
 
-            // Sphere-sphere collisions
             for (uint j = 0; j < pc.object_count; ++j) {
                 if (i == j) continue;
                 InstanceData other = read_buf.data[j];
+                
                 vec3 o_pos = other.model[3].xyz;
-                vec3 delta = pos - o_pos;
-                float dist = length(delta);
-                float min_dist = 1.0;
+                float o_radius = other.velocity.w;
+                float o_type = other.physic.x;
+                float o_mass = max(other.physic.y, 0.1);
 
-                if (dist < min_dist && dist > 0.0) {
-                    vec3 dir = normalize(delta);
-                    float overlap = min_dist - dist;
+                vec3 normal = vec3(0.0);
+                float overlap = 0.0;
 
-                    // push apart
-                    pos += dir * (overlap * 0.5);
+                if (type == 0.0 && o_type == 0.0) { 
+                    vec3 delta = pos - o_pos;
+                    vec3 dists = abs(delta);
+                    vec3 sizes = vec3(radius + o_radius);
+                    if (all(lessThan(dists, sizes))) {
+                        vec3 face_dist = sizes - dists;
+                        if (face_dist.x < face_dist.y && face_dist.x < face_dist.z) {
+                            normal = vec3(delta.x > 0.0 ? 1.0 : -1.0, 0.0, 0.0);
+                            overlap = face_dist.x;
+                        } else if (face_dist.y < face_dist.z) {
+                            normal = vec3(0.0, delta.y > 0.0 ? 1.0 : -1.0, 0.0);
+                            overlap = face_dist.y;
+                        } else {
+                            normal = vec3(0.0, 0.0, delta.z > 0.0 ? 1.0 : -1.0);
+                            overlap = face_dist.z;
+                        }
+                    }
+                } 
+                else if (type == 1.0 && o_type == 1.0) { 
+                    vec3 delta = pos - o_pos;
+                    float d = length(delta);
+                    if (d < radius + o_radius && d > 0.0001) {
+                        normal = delta / d;
+                        overlap = (radius + o_radius) - d;
+                    }
+                } 
+                else {
+                    bool i_am_sphere = (type == 1.0);
+                    vec3 s_c = i_am_sphere ? pos : o_pos;
+                    vec3 b_c = i_am_sphere ? o_pos : pos;
+                    float s_r = i_am_sphere ? radius : o_radius;
+                    float b_r = i_am_sphere ? o_radius : radius;
+                    vec3 closest = clamp(s_c, b_c - b_r, b_c + b_r);
+                    vec3 delta = s_c - closest;
+                    float d = length(delta);
+                    if (d < s_r) {
+                        if (d > 0.0001) {
+                            normal = (i_am_sphere ? 1.0 : -1.0) * (delta / d);
+                            overlap = s_r - d;
+                        } else {
+                            vec3 dir = s_c - b_c;
+                            float ld = length(dir);
+                            normal = (i_am_sphere ? 1.0 : -1.0) * (ld > 0.001 ? dir/ld : vec3(0,1,0));
+                            overlap = s_r;
+                        }
+                    }
+                }
 
-                    // elastic bounce along normal
-                    vec3 rel_vel = vel - other.velocity.xyz;
-                    float rel_dot = dot(rel_vel, dir);
-                    if (rel_dot < 0.0) {
-                        float restitution = 0.8;
-                        vel -= (1.0 + restitution) * rel_dot * dir;
+                if (overlap > 0.001) {
+                    float total_m = mass + o_mass;
+                    float m_ratio = o_mass / total_m;
+
+                    pos += normal * overlap * m_ratio * 0.95;
+
+                    vec3 rel_v = vel - other.velocity.xyz;
+                    float v_dot = dot(rel_v, normal);
+                    if (v_dot < 0.0) {
+                        float restitution = (type == 0.0) ? 0.1 : 0.5;
+                        float j_mag = -(1.0 + restitution) * v_dot;
+                        j_mag /= (1.0/mass + 1.0/o_mass);
+                        vel += (j_mag / mass) * normal;
+
+                        vec3 tangent_v = rel_v - (v_dot * normal);
+                        vel -= tangent_v * 0.2;
                     }
                 }
             }
 
+            // this is floor, uncomment if needed
+            // if (pos.y < radius) {
+            //     pos.y = radius;
+            //     if (vel.y < 0.0) {
+            //         vel.y = -vel.y * 0.2;
+            //         vel.xz *= 0.8;
+            //     }
+            // }
+
+            // Write back
             me.model[3] = vec4(pos, 1.0);
             me.velocity.xyz = vel;
             write_buf.data[i] = me;
@@ -87,6 +157,7 @@ pub mod vs {
             vec4 color;
             vec4 mat_props;
             vec4 velocity;
+            vec4 physic;
         };
 
         layout(location = 0) in vec3 position;

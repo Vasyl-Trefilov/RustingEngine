@@ -4,7 +4,7 @@ mod input;
 mod shaders;
 mod shapes;
 mod build;
-// mod effects;
+mod effects;
 
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
@@ -46,7 +46,7 @@ use crate::renderer::render::process_render;
 use crate::renderer::render::create_builder;
 use crate::shapes::gltfLoader::{load_gltf_scene};
 use crate::shapes::shapes::{create_cube, create_plane, create_sphere_subdivided, create_triangle};
-// use crate::effects::{RainSettings, SphereSettings, create_event_horizon, create_fire, create_fountain, create_monochrome_rain, create_nebula_sphere, create_void_fire};
+use crate::effects::{RainSettings, SphereSettings, create_event_horizon, create_fire, create_fountain, create_monochrome_rain, create_nebula_sphere, create_void_fire};
 use crate::scene::{InstanceHandle, record_compute_physics, begin_render_pass_only};
 
 fn main() {
@@ -103,13 +103,13 @@ fn main() {
     // let mut prev_mouse_state = MouseState::default();
     let mut inputs = InputState{speed: 0.1, ..Default::default()};
     let mut rng = rand::rng();
-    let triangle = create_triangle(&memory_allocator, [1.0,1.0,1.0]);
-    let cube = create_plane(&memory_allocator, [0.0,0.0,0.0], 10.0, 10.0);
-
+    let triangle = create_triangle(&memory_allocator);
+    // let plane = create_plane(&memory_allocator, [0.0,0.0,0.0], 10.0, 10.0);
+    let cube = create_cube(&memory_allocator);
     // * Scene
     let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, &base.queue, 3, 1_000_000); // 1_000_000
     let mut camera = Camera {
-        position: [0.0, 20.0, 20.0],
+        position: [-7.0, 5.0, 20.0],
         yaw: 90.0f32.to_radians(), 
         pitch: 0.0,
     };
@@ -123,38 +123,76 @@ fn main() {
         instance.roughness = 0.85;  
         instance.metalness = 0.15;    
         
-        instance.velocity = [0.0, 3.0, 0.0, 1.0]; 
+        // instance.velocity = [0.0, 0.0, 0.0, 1.0]; 
 
-        if instance.transform.position[1] < 1.0 {
-            instance.transform.position[1] = 1.0;
-        }
-
-        instance.model_matrix = instance.transform.to_matrix();
-        scene.add_instance(mesh.clone(), instance.clone());
+        // if instance.transform.position[1] < 1.0 {
+        //     instance.transform.position[1] = 1.0;
+        // }
+        // for i in 0..10 {
+        //     for j in 0..10 {
+        //         for k in 0..10 {
+        //             instance.transform.position[0] = i as f32 * 2.0;
+        //             instance.transform.position[1] = j as f32 * 2.0;
+        //             instance.transform.position[2] = k as f32 * 2.0;
+        //             instance.model_matrix = instance.transform.to_matrix();
+        //             scene.add_instance(mesh.clone(), instance.clone());
+        //         }
+        //     }
+        // }
+        
     }
-    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator, [1.0, 1.0, 1.0], 3);
+    let mut position = [0.0,0.0,0.0];
+
+    for i in 0..10 {
+        for j in 0..3 {
+            for k in 0..10 {
+                 let pos = [
+                    i as f32 * 1.5, 
+                    j as f32 * 2.0 + 5.0, 
+                    k as f32 * 1.5
+                ];
+                scene.add_instance(cube.clone(), Instance {
+                    velocity: [0.0, 0.0, 0.0, 0.5], // Use W as the collision radius!
+                    model_matrix: Transform {position: pos, ..Default::default()}.to_matrix(),
+                    mass: 1.0, 
+                    collision: 0.0,
+                    gravity: 0.0,
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator,  3);
+    scene.add_instance(sphere_sub_mesh.clone(), Instance {
+        velocity: [0.0, 0.0, 0.0, 6.0], // Use W as the collision radius!
+        model_matrix: Transform {position: [7.0, 300.0, 7.0], scale: [6.0, 6.0, 6.0], ..Default::default()}.to_matrix(),
+        mass: 100000.0,
+        collision: 1.0,
+        gravity: 1.0,
+        ..Default::default()
+    });
     
-    let handle = scene.add_instance(
-        sphere_sub_mesh.clone(), 
-        Instance {
-            transform: Transform { position: [10.0, 20.0, 10.0], scale: [4.0, 4.0, 4.0], ..Default::default() },
-            color: [0.0, 1.0, 0.0],        
-            emissive: 1.0,
-            velocity: [0.0, -5.0, 0.0, 4.0], 
-            model_matrix: Transform { position: [10.0, 40.0, 10.0], scale: [4.0, 4.0, 4.0], ..Default::default() }.to_matrix(),
-            ..Default::default()
-        }
-    );
-    scene.add_instance(cube, 
-        Instance {
-            transform: Transform { position: [0.0, 0.0, 0.0], scale: [4.0, 4.0, 4.0], ..Default::default() },
-            color: [1.0, 1.0, 0.0],        
-            emissive: 1.0,
-            velocity: [0.0, 0.0, 0.0, 4.0], 
-            model_matrix: Transform { position: [10.0, 10.0, 10.0], scale: [4.0, 4.0, 4.0], rotation: [PI/2.0, 0.0,0.0],  ..Default::default() }.to_matrix(),
-            ..Default::default()
-        }
-    );
+    // let handle = scene.add_instance(
+    //     sphere_sub_mesh.clone(), 
+    //     Instance {
+    //         transform: Transform { position: [10.0, 20.0, 10.0], scale: [4.0, 4.0, 4.0], ..Default::default() },
+    //         color: [1.0, 1.0, 0.0],        
+    //         emissive: 1.0,
+    //         velocity: [0.0, 0.0, 0.0, 4.0], 
+    //         model_matrix: Transform { position: [30.0, 30.0, 30.0], scale: [4.0, 4.0, 4.0], ..Default::default() }.to_matrix(),
+    //         ..Default::default()
+    //     }
+    // );
+    // scene.add_instance(cube, 
+    //     Instance {
+    //         transform: Transform { position: [0.0, 0.0, 0.0], scale: [4.0, 4.0, 4.0], ..Default::default() },
+    //         color: [1.0, 1.0, 0.0],        
+    //         emissive: 1.0,
+    //         velocity: [0.0, 0.0, 0.0, 4.0], 
+    //         model_matrix: Transform { position: [10.0, 10.0, 10.0], scale: [4.0, 4.0, 4.0], rotation: [PI/2.0, 0.0,0.0],  ..Default::default() }.to_matrix(),
+    //         ..Default::default()
+    //     }
+    // );
 
 
     // let stars_logic = AnimationType::Custom(Arc::new(|transform, _velocity, original_pos, color, elapsed| {
@@ -477,6 +515,7 @@ fn main() {
                 let mut builder = create_builder(&cb_allocator, &base.queue);
 
                 while accumulator >= fixed_dt {
+                    
                     record_compute_physics(
                             &mut builder, 
                             &compute_pipeline, 

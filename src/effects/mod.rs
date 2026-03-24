@@ -84,10 +84,8 @@ pub fn create_fountain(scene: &mut RenderScene, triangle: Mesh, count: u32, sett
         let speed = rng.random_range(0.02..0.05);
         
         let handle = scene.add_instance(triangle.clone(), Instance {
-            transform: Transform { position: base_pos, scale: [0.1; 3], ..Default::default() },
-            original_position: base_pos,
             animation: fountain_logic.clone(),
-            velocity: [angle.cos() * speed, 0.1 + rng.random_range(0.0..0.1), angle.sin() * speed],
+            velocity: [angle.cos() * speed, 0.1 + rng.random_range(0.0..0.1), angle.sin() * speed, 0.0],
             color: s.color,
             metalness: 0.0,   
             roughness: 0.05,
@@ -130,10 +128,8 @@ pub fn create_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Op
     for _ in 0..count {
         let color = [1.0, rng.random_range(0.1..0.4), 0.0];
         let handle = scene.add_instance(mesh.clone(), Instance {
-            transform: Transform { position: [base_pos[0], base_pos[1] + rng.random_range(0.0..max_h), base_pos[2]], ..Default::default() },
-            original_position: base_pos,
             animation: fire_logic.clone(),
-            velocity: [0.0, rng.random_range(0.05..0.1), 0.0],
+            velocity: [0.0, rng.random_range(0.05..0.1), 0.0, 0.0],
             color, 
             emissive: 1.0,
             metalness: 0.0, 
@@ -168,10 +164,8 @@ pub fn create_void_fire(scene: &mut RenderScene, mesh: Mesh, count: u32, setting
     let mut handles = Vec::new();
     for _ in 0..count {
         let handle = scene.add_instance(mesh.clone(), Instance {
-            transform: Transform { position: base_pos, ..Default::default() },
-            original_position: base_pos,
             animation: fire_logic.clone(),
-            velocity: [0.0, rng.random_range(0.04..0.1), 0.0],
+            velocity: [0.0, rng.random_range(0.04..0.1), 0.0, 0.0],
             color: [1.0, 1.0, 1.0],
             metalness: 1.0, 
             ..Default::default()
@@ -229,11 +223,6 @@ pub fn create_event_horizon(scene: &mut RenderScene, mesh: Mesh, count: u32, set
         }
         
         let handle = scene.add_instance(mesh.clone(), Instance {
-            transform: Transform {
-                position: [center[0] + angle.cos() * d, center[1] + rng.random_range(-2.0..2.0), center[2] + angle.sin() * d],
-                rotation: [rng.random_range(0.0..6.28), rng.random_range(0.0..6.28), 0.0],
-                ..Default::default()
-            },
             animation: vortex_logic.clone(),
             color: color,
             metalness: 1.0,        
@@ -252,21 +241,53 @@ pub fn create_monochrome_rain(scene: &mut RenderScene, mesh: Mesh, count: u32, s
     let height = s.area[1];
     let half_d = s.area[2] / 2.0;
 
-    let rain_logic = AnimationType::Custom(Arc::new(move |transform, velocity, _orig, _color, _elapsed| {
-        transform.position[1] -= velocity[1];
-        if transform.position[1] < -height/2.0 { transform.position[1] = height/2.0; }
-        transform.scale = [0.02, 0.6, 0.02];
-    }));
     let mut handles = Vec::new();
-    for _ in 0..count {
-        let pos = [rng.random_range(-half_w..half_w), rng.random_range(-height/2.0..height/2.0), rng.random_range(-half_d..half_d)];
+    
+    for i in 0..count {
+        // Random X and Z position across the entire area
+        let pos_x = rng.random_range(-half_w..half_w);
+        let pos_z = rng.random_range(-half_d..half_d);
+        
+        // Start at random heights, but mostly at the top for better visual effect
+        let pos_y = if rng.random_bool(0.7) {
+            // 70% chance to start at the top
+            rng.random_range(height * 0.8..height)
+        } else {
+            // 30% chance to start anywhere in the column
+            rng.random_range(-height/2.0..height)
+        };
+        
+        let pos = [pos_x, pos_y, pos_z];
+        
+        // Random speed variation for more natural look
+        let speed = rng.random_range(s.speed..s.speed * 2.0);
+        
+        // Create transform for the rain drop
+        let transform = Transform {
+            position: pos,
+            rotation: [0.0, 0.0, 0.0],
+            scale: [0.08, 0.08, 0.08],
+        };
+        
+        let model_matrix = Transform::to_matrix(&transform);
+        
+        // Store area size and speed in your scene's compute shader push constants
+        // You'll need to set these when dispatching the compute shader each frame
+        // scene.set_rain_area(s.area);
+        // scene.set_rain_speed(speed);
+        
         let handle = scene.add_instance(mesh.clone(), Instance {
-            transform: Transform { position: pos, ..Default::default() },
-            animation: rain_logic.clone(),
-            velocity: [0.0, rng.random_range(s.speed..s.speed * 2.0), 0.0],
-            color: [0.7, 0.8, 1.0], roughness: 0.1, emissive: 1.0, metalness: 1.0, ..Default::default()
+            model_matrix,
+            velocity: [0.0, -speed, 0.0, 0.1], // Start with initial downward velocity
+            color: [0.7, 0.8, 1.0],
+            emissive: 1.0,
+            roughness: 0.1,
+            metalness: 1.0,
+            animation: AnimationType::Static,
+            ..Default::default()
         });
-    handles.push(handle);
+        
+        handles.push(handle);
     }
     handles
 }
@@ -297,10 +318,8 @@ pub fn create_nebula_sphere(scene: &mut RenderScene, mesh: Mesh, count: u32, set
         let z = center[2] + radius * phi.cos();
 
         let handle = scene.add_instance(mesh.clone(), Instance {
-            transform: Transform { position: [x, y, z], ..Default::default() },
-            original_position: [x, y, z],
             animation: stars_logic.clone(),
-            velocity: [rng.random_range(0.05..s.rotation_speed), rng.random_range(1.0..3.0), 0.0],
+            velocity: [rng.random_range(0.05..s.rotation_speed), rng.random_range(1.0..3.0), 0.0, 0.0],
             color: [1.0, 1.0, 1.0], roughness: 1.0, ..Default::default()
         });
      handles.push(handle);
