@@ -1,4 +1,4 @@
-pub mod cs {
+pub mod cs1 { // this is test shader for fast physic disable
     vulkano_shaders::shader! {
         ty: "compute",
         src: "
@@ -32,112 +32,124 @@ pub mod cs {
             if (i >= pc.object_count) return;
             write_buf.data[i].model[0] += 0.0; // its not useless, just trust me, without this shit, nothing will work, bc its not creating a binding, if you delete this, it will crash and say, that there is no binding 1
             InstanceData me = read_buf.data[i];
+            // write_buf.data[i] = me;
+        }
+        ",
+    }
+}
+
+
+pub mod cs {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        src: "
+        #version 450
+
+        layout(local_size_x = 256) in;
+
+        struct InstanceData {
+            mat4 model;
+            vec4 color;
+            vec4 mat_props;
+            vec4 velocity;
+            vec4 physic;
+        };
+
+        layout(std430, set = 0, binding = 0) readonly buffer ReadBuffer { InstanceData data[]; } read_buf;
+        layout(std430, set = 0, binding = 1) writeonly buffer WriteBuffer { InstanceData data[]; } write_buf;
+
+        layout(push_constant) uniform PushConstants {
+            float dt;
+            uint object_count;
+            uint solid_count; 
+        } pc;
+
+        float rand(vec2 co) {
+            return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+        }
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i >= pc.object_count) return;
+            write_buf.data[i].model[0] += 0.0; // its not useless, just trust me, without this shit, nothing will work, bc its not creating a binding, if you delete this, it will crash and say, that there is no binding 1
+            InstanceData me = read_buf.data[i];
             vec3 pos = me.model[3].xyz;
             vec3 vel = me.velocity.xyz;
             float radius = me.velocity.w;
-            
-            float gravity_scale = me.physic.z; 
-            float type = me.physic.x;
+            float type = me.physic.x;   
             float mass = max(me.physic.y, 0.1);
+            float gravity_scale = me.physic.z;
             float dt = pc.dt;
 
-            vel.y -= 90.8 * dt * gravity_scale; 
-
-            float damping = (gravity_scale == 0.0) ? 0.5 : 0.1;
-            vel *= (1.0 - damping * dt);
-            
+            vel.y -= 9.8 * dt * gravity_scale; 
             pos += vel * dt;
 
-            for (uint j = 0; j < pc.object_count; ++j) {
+            uint search_limit = (type > 1.5) ? pc.solid_count : pc.object_count;
+
+            for (uint j = 0; j < search_limit; ++j) {
                 if (i == j) continue;
                 InstanceData other = read_buf.data[j];
-                
+                if (other.physic.x > 1.5) continue; 
                 vec3 o_pos = other.model[3].xyz;
                 float o_radius = other.velocity.w;
                 float o_type = other.physic.x;
-                float o_mass = max(other.physic.y, 0.1);
 
                 vec3 normal = vec3(0.0);
                 float overlap = 0.0;
 
-                if (type == 0.0 && o_type == 0.0) { 
-                    vec3 delta = pos - o_pos;
-                    vec3 dists = abs(delta);
-                    vec3 sizes = vec3(radius + o_radius);
-                    if (all(lessThan(dists, sizes))) {
-                        vec3 face_dist = sizes - dists;
-                        if (face_dist.x < face_dist.y && face_dist.x < face_dist.z) {
-                            normal = vec3(delta.x > 0.0 ? 1.0 : -1.0, 0.0, 0.0);
-                            overlap = face_dist.x;
-                        } else if (face_dist.y < face_dist.z) {
-                            normal = vec3(0.0, delta.y > 0.0 ? 1.0 : -1.0, 0.0);
-                            overlap = face_dist.y;
-                        } else {
-                            normal = vec3(0.0, 0.0, delta.z > 0.0 ? 1.0 : -1.0);
-                            overlap = face_dist.z;
-                        }
-                    }
-                } 
-                else if (type == 1.0 && o_type == 1.0) { 
+                if (type > 0.5 && o_type > 0.5) { 
                     vec3 delta = pos - o_pos;
                     float d = length(delta);
-                    if (d < radius + o_radius && d > 0.0001) {
+                    if (d < radius + o_radius && d > 0.001) {
                         normal = delta / d;
                         overlap = (radius + o_radius) - d;
                     }
-                } 
-                else {
-                    bool i_am_sphere = (type == 1.0);
-                    vec3 s_c = i_am_sphere ? pos : o_pos;
-                    vec3 b_c = i_am_sphere ? o_pos : pos;
-                    float s_r = i_am_sphere ? radius : o_radius;
-                    float b_r = i_am_sphere ? o_radius : radius;
+                } else { 
+                    vec3 b_c = (type < 0.5) ? pos : o_pos;
+                    vec3 s_c = (type < 0.5) ? o_pos : pos;
+                    float b_r = (type < 0.5) ? radius : o_radius;
+                    float s_r = (type < 0.5) ? o_radius : radius;
+
                     vec3 closest = clamp(s_c, b_c - b_r, b_c + b_r);
                     vec3 delta = s_c - closest;
                     float d = length(delta);
-                    if (d < s_r) {
-                        if (d > 0.0001) {
-                            normal = (i_am_sphere ? 1.0 : -1.0) * (delta / d);
-                            overlap = s_r - d;
-                        } else {
-                            vec3 dir = s_c - b_c;
-                            float ld = length(dir);
-                            normal = (i_am_sphere ? 1.0 : -1.0) * (ld > 0.001 ? dir/ld : vec3(0,1,0));
-                            overlap = s_r;
-                        }
+                    if (d < s_r && d > 0.001) {
+                        normal = (type > 0.5 ? 1.0 : -1.0) * (delta / d);
+                        overlap = s_r - d;
                     }
                 }
 
-                if (overlap > 0.001) {
-                    float total_m = mass + o_mass;
-                    float m_ratio = o_mass / total_m;
-
-                    pos += normal * overlap * m_ratio * 0.95;
-
+                if (overlap > 0.0) {
+                    pos += normal * overlap; // Push out
+                    
                     vec3 rel_v = vel - other.velocity.xyz;
                     float v_dot = dot(rel_v, normal);
+                    
                     if (v_dot < 0.0) {
-                        float restitution = (type == 0.0) ? 0.1 : 0.5;
-                        float j_mag = -(1.0 + restitution) * v_dot;
-                        j_mag /= (1.0/mass + 1.0/o_mass);
-                        vel += (j_mag / mass) * normal;
+                        if (type > 1.5) {
+                            float bounce = 0.2;
+                            vel = reflect(vel, normal) * bounce;
 
-                        vec3 tangent_v = rel_v - (v_dot * normal);
-                        vel -= tangent_v * 0.2;
+                            vel.x += (rand(pos.xz) - 0.5) * 2.0;
+                            vel.z += (rand(pos.zx) - 0.5) * 2.0;
+                        } else {
+                            float restitution = 0.5;
+                            vel += (-(1.0 + restitution) * v_dot / (1.0/mass + 1.0/other.physic.y)) / mass * normal;
+                        }
                     }
                 }
             }
 
-            // this is floor, uncomment if needed
-            // if (pos.y < radius) {
-            //     pos.y = radius;
-            //     if (vel.y < 0.0) {
-            //         vel.y = -vel.y * 0.2;
-            //         vel.xz *= 0.8;
-            //     }
-            // }
+            if (pos.y < -10.0) {
+                if (type > 1.5) { 
+                    pos.y = 80.0; 
+                    vel = vec3(0, -10.0 - rand(pos.xy) * 20.0, 0);
+                } else { 
+                    pos.y = radius;
+                    vel.y *= -0.2;
+                }
+            }
 
-            // Write back
             me.model[3] = vec4(pos, 1.0);
             me.velocity.xyz = vel;
             write_buf.data[i] = me;

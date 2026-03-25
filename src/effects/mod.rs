@@ -234,56 +234,44 @@ pub fn create_event_horizon(scene: &mut RenderScene, mesh: Mesh, count: u32, set
     handles
 }
 
-pub fn create_monochrome_rain(scene: &mut RenderScene, mesh: Mesh, count: u32, settings: Option<RainSettings>) -> Vec<InstanceHandle> {
+pub fn create_monochrome_rain(
+    scene: &mut RenderScene, 
+    mesh: Mesh, 
+    count: u32, 
+    settings: Option<RainSettings>
+) -> Vec<InstanceHandle> {
     let s = settings.unwrap_or_default();
     let mut rng = rand::rng();
+    
+    // Area: [Width, Height, Depth]
     let half_w = s.area[0] / 2.0;
     let height = s.area[1];
     let half_d = s.area[2] / 2.0;
 
     let mut handles = Vec::new();
     
-    for i in 0..count {
-        // Random X and Z position across the entire area
-        let pos_x = rng.random_range(-half_w..half_w);
-        let pos_z = rng.random_range(-half_d..half_d);
+    for _ in 0..count {
+        let pos = [
+            rng.random_range(-half_w..half_w),
+            rng.random_range(0.0..height),
+            rng.random_range(-half_d..half_d),
+        ];
         
-        // Start at random heights, but mostly at the top for better visual effect
-        let pos_y = if rng.random_bool(0.7) {
-            // 70% chance to start at the top
-            rng.random_range(height * 0.8..height)
-        } else {
-            // 30% chance to start anywhere in the column
-            rng.random_range(-height/2.0..height)
-        };
-        
-        let pos = [pos_x, pos_y, pos_z];
-        
-        // Random speed variation for more natural look
         let speed = rng.random_range(s.speed..s.speed * 2.0);
         
-        // Create transform for the rain drop
-        let transform = Transform {
-            position: pos,
-            rotation: [0.0, 0.0, 0.0],
-            scale: [0.08, 0.08, 0.08],
-        };
-        
-        let model_matrix = Transform::to_matrix(&transform);
-        
-        // Store area size and speed in your scene's compute shader push constants
-        // You'll need to set these when dispatching the compute shader each frame
-        // scene.set_rain_area(s.area);
-        // scene.set_rain_speed(speed);
-        
         let handle = scene.add_instance(mesh.clone(), Instance {
-            model_matrix,
-            velocity: [0.0, -speed, 0.0, 0.1], // Start with initial downward velocity
-            color: [0.7, 0.8, 1.0],
-            emissive: 1.0,
-            roughness: 0.1,
-            metalness: 1.0,
-            animation: AnimationType::Static,
+            model_matrix: Transform {
+                position: pos,
+                scale: [0.05, 0.15, 0.05], 
+                ..Default::default()
+            }.to_matrix(),
+
+            velocity: [0.0, -20.0, 0.0, 0.1], 
+            mass: 0.1,
+            collision: 2.0,
+            gravity: 0.5, 
+            color: [0.6, 0.7, 1.0],
+            emissive: 0.8,  
             ..Default::default()
         });
         

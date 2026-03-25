@@ -28,7 +28,6 @@ use vulkano::DeviceSize;
 use rayon::prelude::*;
 
 use crate::input::MouseState;
-// use crate::renderer::frustum::{frustum_planes, sphere_visible, view_proj_matrix};
 use crate::renderer::pipeline::UniformBufferObject;
 use crate::scene::animation::AnimationType;
 use crate::scene::object::{Instance, InstanceData, RenderBatch, Texture};
@@ -162,7 +161,6 @@ impl RenderScene {
             texture_sampler, 
             descriptor_set_allocator: descriptor_set_allocator.clone(),
             descriptor_sets: vec![Vec::new(); frames_in_flight],
-            // physics_buffer,
             total_instances: 0,
             physics_read,
             physics_write,
@@ -214,29 +212,43 @@ impl RenderScene {
             .wait(None).unwrap();
     }
 
-    pub fn ensure_descriptor_cache(&mut self, pipeline: &Arc<GraphicsPipeline>, target_count: usize) {
+    pub fn ensure_descriptor_cache(&mut self, pipeline: &Arc<GraphicsPipeline>, target_tex_count: usize) {
         let layout = pipeline.layout().set_layouts()[0].clone();
+        
         for (frame_i, frame) in self.frames.iter().enumerate() {
-            while self.descriptor_sets[frame_i].len() < target_count {
-                let tex_i = self.descriptor_sets[frame_i].len();
-                let set = PersistentDescriptorSet::new(
-                    self.descriptor_set_allocator.as_ref(),
-                    layout.clone(),[
-                        WriteDescriptorSet::buffer(0, frame.uniform_buffer.clone()), 
-                        WriteDescriptorSet::image_view_sampler(1, self.texture_views[tex_i].clone(), self.texture_sampler.clone()),
-                        WriteDescriptorSet::buffer(2, self.physics_read.clone())
+            let total_sets_needed = target_tex_count * 2;
 
+            if self.descriptor_sets[frame_i].len() == total_sets_needed {
+                continue;
+            }
+
+            self.descriptor_sets[frame_i].clear();
+
+            for tex_idx in 0..target_tex_count {
+                // Buffer read
+                let set_a = PersistentDescriptorSet::new(
+                    &self.descriptor_set_allocator,
+                    layout.clone(), [
+                        WriteDescriptorSet::buffer(0, frame.uniform_buffer.clone()), 
+                        WriteDescriptorSet::image_view_sampler(1, self.texture_views[tex_idx].clone(), self.texture_sampler.clone()),
+                        WriteDescriptorSet::buffer(2, self.physics_read.clone())
                     ],
                 ).unwrap();
-                self.descriptor_sets[frame_i].push(set);
+
+                // Buffer write
+                let set_b = PersistentDescriptorSet::new(
+                    &self.descriptor_set_allocator,
+                    layout.clone(), [
+                        WriteDescriptorSet::buffer(0, frame.uniform_buffer.clone()), 
+                        WriteDescriptorSet::image_view_sampler(1, self.texture_views[tex_idx].clone(), self.texture_sampler.clone()),
+                        WriteDescriptorSet::buffer(2, self.physics_write.clone())
+                    ],
+                ).unwrap();
+
+                self.descriptor_sets[frame_i].push(set_a);
+                self.descriptor_sets[frame_i].push(set_b);
             }
         }
-    }
-
-    pub fn prepare_frame_ubo(&mut self, frame_index: usize, view: [[f32; 4]; 4], proj: [[f32; 4]; 4], eye_pos:[f32; 3]) {
-        let mut ubo = self.frames[frame_index].uniform_buffer.write().unwrap();
-        ubo.view = view; ubo.proj = proj; ubo.eye_pos = eye_pos;
-        ubo.light_pos = self.light_pos; ubo.light_color = self.light_color; ubo.light_intensity = self.light_intensity;
     }
 
     pub fn record_draws(
@@ -244,6 +256,7 @@ impl RenderScene {
         builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         pipeline: &Arc<GraphicsPipeline>,
         frame_index: usize,
+        physics_buffer_index: usize, // Pass 0 for Read, 1 for Write
     ) {
         let mut current_offset = 0;
         
@@ -254,36 +267,33 @@ impl RenderScene {
             builder.bind_vertex_buffers(0, (batch.mesh.vertices.clone(),));
             
             let requested_tex = batch.mesh.base_color_texture.unwrap_or(0);
-            let available_textures = self.descriptor_sets[frame_index].len();
-            let tex_idx = requested_tex.min(available_textures.saturating_sub(1));
+            
+            // Calculate the descriptor: 
+            // Tex 0 starts at 0 (Buffer A) and 1 (Buffer B)
+            // Tex 1 starts at 2 (Buffer A) and 3 (Buffer B)
+            let descriptor_idx = (requested_tex * 2) + physics_buffer_index;
 
             builder.bind_descriptor_sets(
                 PipelineBindPoint::Graphics, 
                 pipeline.layout().clone(), 
                 0, 
-                self.descriptor_sets[frame_index][tex_idx].clone()
+                self.descriptor_sets[frame_index][descriptor_idx].clone()
             );
 
             if let Some(indices) = &batch.mesh.indices {
                 builder.bind_index_buffer(indices.clone());
-                builder.draw_indexed(
-                    batch.mesh.index_count, 
-                    count, 
-                    0, 
-                    0, 
-                    current_offset
-                ).unwrap();
+                builder.draw_indexed(batch.mesh.index_count, count, 0, 0, current_offset).unwrap();
             } else {
-                builder.draw(
-                    batch.mesh.vertex_count, 
-                    count, 
-                    0, 
-                    current_offset
-                ).unwrap();
+                builder.draw(batch.mesh.vertex_count, count, 0, current_offset).unwrap();
             }
             
             current_offset += count;
         }
+    }
+    pub fn prepare_frame_ubo(&mut self, frame_index: usize, view: [[f32; 4]; 4], proj: [[f32; 4]; 4], eye_pos:[f32; 3]) {
+        let mut ubo = self.frames[frame_index].uniform_buffer.write().unwrap();
+        ubo.view = view; ubo.proj = proj; ubo.eye_pos = eye_pos;
+        ubo.light_pos = self.light_pos; ubo.light_color = self.light_color; ubo.light_intensity = self.light_intensity;
     }
 
     fn create_texture_image(
@@ -357,7 +367,7 @@ impl RenderScene {
             let view = ImageView::new_default(image).unwrap();
             self.texture_views.push(view);
         }
-        self.ensure_descriptor_cache(pipeline, self.texture_views.len());
+        self.ensure_descriptor_cache(pipeline, textures.len());
     }
 
     pub fn set_light(&mut self, position: [f32; 3], color: [f32; 3], intensity: f32) {
@@ -372,7 +382,8 @@ pub fn record_compute_physics(
     compute_pipeline: &Arc<ComputePipeline>,
     compute_set: &Arc<PersistentDescriptorSet>,
     total_objects: u32,
-    dt: f32
+    dt: f32,
+    solid_count: u32
 ) {
     let workgroups_x = (total_objects + 255) / 256;
     builder
@@ -386,7 +397,7 @@ pub fn record_compute_physics(
         .push_constants(
             compute_pipeline.layout().clone(), 
             0, 
-            PhysicsPushConstants { dt, object_count: total_objects }
+            PhysicsPushConstants { dt, object_count: total_objects, solid_count }
         )
         .dispatch([workgroups_x, 1, 1])
         .unwrap();

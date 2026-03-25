@@ -20,6 +20,7 @@ pub struct InstanceData {
 pub struct PhysicsPushConstants {
     pub dt: f32,
     pub object_count: u32,
+    pub solid_count: u32
 }
 
 #[derive(Clone)]

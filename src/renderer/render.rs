@@ -17,7 +17,8 @@ pub fn process_render(
     compute_pipeline: &Arc<ComputePipeline>,
     compute_set: &Arc<PersistentDescriptorSet>,
     total_objects: u32,
-    dt: f32
+    dt: f32,
+    solid_object_count: u32
 ) {
     if total_objects > 0 {
         let workgroups_x = (total_objects + 255) / 256;
@@ -25,7 +26,7 @@ pub fn process_render(
         builder
             .bind_pipeline_compute(compute_pipeline.clone())
             .bind_descriptor_sets(PipelineBindPoint::Compute, compute_pipeline.layout().clone(), 0, compute_set.clone())
-            .push_constants(compute_pipeline.layout().clone(), 0, PhysicsPushConstants { dt, object_count: total_objects })
+            .push_constants(compute_pipeline.layout().clone(), 0, PhysicsPushConstants { dt, object_count: total_objects, solid_count: solid_object_count })
             .dispatch([workgroups_x, 1, 1])
             .unwrap();
     }

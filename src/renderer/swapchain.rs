@@ -34,23 +34,23 @@ pub fn create_render_pass(device: Arc<Device>, swapchain: &Arc<Swapchain>) -> st
     vulkano::ordered_passes_renderpass!(
         device.clone(),
         attachments: {
-            color: {  // Color attachment (the final image)
-                load: Clear,      // Clear to a color at start
-                store: Store,     // Save the result
+            color: {
+                load: Clear,
+                store: Store,
                 format: swapchain.image_format(),
-                samples: 1,       // No multisampling
+                samples: 1,
             },
-            depth: {  // Depth attachment (for 3D sorting)
-                load: Clear,      // Clear to max depth
-                store: DontCare,  // Don't need to save depth buffer
+            depth: {
+                load: Clear,
+                store: DontCare,
                 format: vulkano::format::Format::D16_UNORM,
                 samples: 1,
             }
         },
         passes: [ {
-            color: [color],        // Use color attachment
-            depth_stencil: {depth}, // Use depth attachment
-            input: []               // No input attachments
+            color: [color],
+            depth_stencil: {depth},
+            input: []
         } ],
     ).unwrap()
 }

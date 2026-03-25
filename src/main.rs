@@ -24,14 +24,14 @@ use std::fmt::format;
 use vulkano::swapchain::CompositeAlpha;
 use vulkano::sync::PipelineStages;
 use vulkano::sync::AccessFlags;
-
+use vulkano::NonExhaustive;
 
 use crate::scene::animation::AnimationType;
 use std::sync::Arc;
 use crate::renderer::swapchain::{create_framebuffers, create_render_pass, create_swapchain_and_images};
 use crate::shapes::VertexPosColorNormal;
  
-use std::{panic};
+use std::{default, panic};
 use rand::*;
 use crate::renderer::camera::{Camera, camera_rotate, create_look_at, create_projection_matrix};
 use crate::scene::{RenderScene};
@@ -48,6 +48,14 @@ use crate::shapes::gltfLoader::{load_gltf_scene};
 use crate::shapes::shapes::{create_cube, create_plane, create_sphere_subdivided, create_triangle};
 use crate::effects::{RainSettings, SphereSettings, create_event_horizon, create_fire, create_fountain, create_monochrome_rain, create_nebula_sphere, create_void_fire};
 use crate::scene::{InstanceHandle, record_compute_physics, begin_render_pass_only};
+use vulkano::sync::{DependencyInfo, BufferMemoryBarrier};
+use vulkano::command_buffer::synced::SyncCommandBufferBuilder;
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder,
+    CommandBufferUsage,
+};
+use smallvec::SmallVec;
+
 
 fn main() {
 
@@ -86,7 +94,7 @@ fn main() {
             image_extent: dims,
             image_usage: ImageUsage::COLOR_ATTACHMENT,
             composite_alpha: CompositeAlpha::Opaque,
-            present_mode: PresentMode::Fifo, 
+            present_mode: PresentMode::Immediate, 
             ..Default::default()
         },
     ).unwrap();
@@ -109,7 +117,7 @@ fn main() {
     // * Scene
     let mut scene = RenderScene::new(&memory_allocator, &descriptor_set_allocator, &pipeline, &base.queue, 3, 1_000_000); // 1_000_000
     let mut camera = Camera {
-        position: [-7.0, 5.0, 20.0],
+        position: [0.0, 5.0, 20.0],
         yaw: 90.0f32.to_radians(), 
         pitch: 0.0,
     };
@@ -142,35 +150,48 @@ fn main() {
         
     }
     let mut position = [0.0,0.0,0.0];
-
-    for i in 0..10 {
-        for j in 0..3 {
-            for k in 0..10 {
-                 let pos = [
-                    i as f32 * 1.5, 
-                    j as f32 * 2.0 + 5.0, 
-                    k as f32 * 1.5
-                ];
-                scene.add_instance(cube.clone(), Instance {
-                    velocity: [0.0, 0.0, 0.0, 0.5], // Use W as the collision radius!
-                    model_matrix: Transform {position: pos, ..Default::default()}.to_matrix(),
-                    mass: 1.0, 
-                    collision: 0.0,
-                    gravity: 0.0,
-                    ..Default::default()
-                });
-            }
-        }
-    }
-    let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator,  3);
-    scene.add_instance(sphere_sub_mesh.clone(), Instance {
-        velocity: [0.0, 0.0, 0.0, 6.0], // Use W as the collision radius!
-        model_matrix: Transform {position: [7.0, 300.0, 7.0], scale: [6.0, 6.0, 6.0], ..Default::default()}.to_matrix(),
-        mass: 100000.0,
-        collision: 1.0,
-        gravity: 1.0,
+    
+    scene.add_instance(cube.clone(), Instance {
+        velocity: [0.0, 0.0, 0.0, 2.5], // Use W as the collision radius!
+        model_matrix: Transform {position: [0.0,10.0,0.0], scale: [5.0,5.0,5.0], ..Default::default()}.to_matrix(),
+        mass: 1.0, 
+        collision: 0.0,
+        gravity: 0.0,
+        color: [0.0, 1.0, 0.0],
+        emissive: 0.5,
         ..Default::default()
     });
+
+    // for i in 0..10 {
+    //     for j in 0..3 {
+    //         for k in 0..10 {
+    //              let pos = [
+    //                 i as f32 * 1.5, 
+    //                 j as f32 * 2.0 + 5.0, 
+    //                 k as f32 * 1.5
+    //             ];
+    //             scene.add_instance(cube.clone(), Instance {
+    //                 velocity: [0.0, 0.0, 0.0, 0.5], // Use W as the collision radius!
+    //                 model_matrix: Transform {position: pos, ..Default::default()}.to_matrix(),
+    //                 mass: 1.0, 
+    //                 collision: 0.0,
+    //                 gravity: 0.0,
+    //                 color: [1.0, 0.0, 0.0],
+    //                 ..Default::default()
+    //             });
+    //         }
+    //     }
+    // }
+    // let sphere_sub_mesh = create_sphere_subdivided(&memory_allocator,  3);
+    // scene.add_instance(sphere_sub_mesh.clone(), Instance {
+    //     velocity: [0.0, 0.0, 0.0, 6.0], // Use W as the collision radius!
+    //     model_matrix: Transform {position: [7.0, 300.0, 7.0], scale: [6.0, 6.0, 6.0], ..Default::default()}.to_matrix(),
+    //     mass: 100000.0,
+    //     collision: 1.0,
+    //     gravity: 1.0,
+    //     color: [0.0, 1.0, 0.0],
+    //     ..Default::default()
+    // });
     
     // let handle = scene.add_instance(
     //     sphere_sub_mesh.clone(), 
@@ -242,8 +263,19 @@ fn main() {
     // create_void_fire(&mut scene, triangle.clone(), 3000, None);
     // create_nebula_sphere(&mut scene, triangle.clone(), 3000, None);
     // create_event_horizon(&mut scene, triangle.clone(), 3000, Some(SphereSettings{center: [20.0,20.0,20.0], radius: 8.0, random_color: false, ..Default::default()}));
-    // create_monochrome_rain(&mut scene, triangle.clone(), 3000, Some(RainSettings{speed: 0.01, ..Default::default()}));
-    
+    let solid_object_count = 1; 
+    println!("{:?}", solid_object_count.clone());
+    let rain_mesh = create_cube(&memory_allocator); 
+    let rain_handles = create_monochrome_rain(
+        &mut scene, 
+        rain_mesh, 
+        5000, 
+        Some(RainSettings {
+            area: [50.0, 100.0, 50.0],
+            speed: 20.0,
+            ..Default::default()
+        })
+    );
 
     // * So I dont want to lie, this spheres was created by gemini, bc why not? 
     // // 1. POLISHED COPPER (High Metalness + Low Roughness)
@@ -331,7 +363,7 @@ fn main() {
     // );
 
     scene.upload_to_gpu(&memory_allocator, &base.queue);
-    scene.ensure_descriptor_cache(&pipeline, scene.texture_views.len());
+    scene.ensure_descriptor_cache(&pipeline, textures.len());
     let compute_shader = shaders::cs::load(base.device.clone()).unwrap(); // pls recompile shader
     let compute_pipeline = ComputePipeline::new(
         base.device.clone(),
@@ -371,6 +403,28 @@ fn main() {
     let mut last_frame_instant = std::time::Instant::now(); 
     let mut accumulator = 0.0;
     let fixed_dt = 1.0 / 60.0; 
+
+
+    // For physic swap
+    let set_0 = PersistentDescriptorSet::new(
+        &descriptor_set_allocator,
+        compute_layout.clone(),
+        [
+            WriteDescriptorSet::buffer(0, scene.physics_read.clone()), 
+            WriteDescriptorSet::buffer(1, scene.physics_write.clone()),
+        ]
+    ).unwrap();
+
+    let set_1 = PersistentDescriptorSet::new(
+        &descriptor_set_allocator,
+        compute_layout.clone(),
+        [
+            WriteDescriptorSet::buffer(0, scene.physics_write.clone()), 
+            WriteDescriptorSet::buffer(1, scene.physics_read.clone()),
+        ]
+    ).unwrap();
+
+    let mut compute_ping_pong = false;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
@@ -491,7 +545,7 @@ fn main() {
                         image_extent: dims, 
                         ..swapchain.create_info()
                     }).unwrap();
-                    
+
                     swapchain = new_sw;
                     framebuffers = renderer::swapchain::create_framebuffers(&new_img, &render_pass, &memory_allocator);
                     
@@ -515,41 +569,41 @@ fn main() {
                 let mut builder = create_builder(&cb_allocator, &base.queue);
 
                 while accumulator >= fixed_dt {
-                    
-                    record_compute_physics(
-                            &mut builder, 
-                            &compute_pipeline, 
-                            &compute_set, 
-                            scene.total_instances, 
-                            fixed_dt 
-                        );
-                        std::mem::swap(&mut scene.physics_read, &mut scene.physics_write);
-
-                        compute_set = PersistentDescriptorSet::new(
-                            &descriptor_set_allocator,
-                            compute_layout.clone(),
-                            [
-                                WriteDescriptorSet::buffer(0, scene.physics_read.clone()),
-                                WriteDescriptorSet::buffer(1, scene.physics_write.clone()),
-                            ],
-                        ).unwrap();
-                        accumulator -= fixed_dt;
+                    let active_compute_set = if compute_ping_pong { &set_1 } else { &set_0 };
+                    record_compute_physics(&mut builder, &compute_pipeline, active_compute_set, scene.total_instances, fixed_dt, solid_object_count);
+                    compute_ping_pong = !compute_ping_pong; 
+                    accumulator -= fixed_dt;
                 }
 
-                scene.descriptor_sets.iter_mut().for_each(|v| v.clear());
-                scene.ensure_descriptor_cache(&pipeline, scene.texture_views.len());
-                
-                begin_render_pass_only(&mut builder, &framebuffers, img_index, dims, &pipeline);
-                scene.record_draws(&mut builder, &pipeline, frame_index);
-                builder.end_render_pass().unwrap();
-                
-                let command_buffer = builder.build().unwrap();
+                let compute_command_buffer = builder.build().unwrap();
 
-                // ! SUBMIT TO GPU 
-                // We use sync::now() here to break the infinite memory chain
+                let compute_future = sync::now(base.device.clone())
+                    .then_execute(base.queue.clone(), compute_command_buffer)
+                    .unwrap()
+                    .then_signal_fence_and_flush()
+                    .unwrap();
+
+                compute_future.wait(None).unwrap(); // Wait for compute to finish
+
+                let mut render_builder = create_builder(&cb_allocator, &base.queue);
+
+                // Ensure descriptor cache is ready
+                let tex_count = scene.texture_views.len();
+                scene.ensure_descriptor_cache(&pipeline, tex_count);
+
+                begin_render_pass_only(&mut render_builder, &framebuffers, img_index, dims, &pipeline);
+                let physics_idx = if compute_ping_pong { 0 } else { 1 };
+                scene.record_draws(&mut render_builder, &pipeline, frame_index, physics_idx);
+                let render_physics_index = if compute_ping_pong { 0 } else { 1 };
+                scene.record_draws(&mut render_builder, &pipeline, frame_index, render_physics_index);
+                render_builder.end_render_pass().unwrap();
+
+                let render_command_buffer = render_builder.build().unwrap();
+
                 let future = sync::now(base.device.clone())
                     .join(acquire_future)
-                    .then_execute(base.queue.clone(), command_buffer).unwrap()
+                    .then_execute(base.queue.clone(), render_command_buffer)
+                    .unwrap()
                     .then_swapchain_present(base.queue.clone(), SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), img_index))
                     .then_signal_fence_and_flush();
 
