@@ -1,11 +1,13 @@
 pub mod camera;
 pub mod pipeline;
-pub mod swapchain;
 pub mod render;
+pub mod swapchain;
 
 use std::sync::Arc;
 use vulkano::device::physical::PhysicalDeviceType;
-use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags};
+use vulkano::device::{
+    Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
+};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::swapchain::Surface;
 use vulkano::VulkanLibrary;
@@ -22,21 +24,30 @@ pub struct VulkanBase {
     pub instance: Arc<Instance>,
 }
 
-pub fn init_vulkan(event_loop: &EventLoop<()>) -> VulkanBase {
+pub fn init_vulkan(event_loop: &EventLoop<()>, title: &str) -> VulkanBase {
     let library = VulkanLibrary::new().expect("No Vulkan driver found.");
     let required_extensions = vulkano_win::required_extensions(&library);
 
-    let instance = Instance::new(library, InstanceCreateInfo {
-        enabled_extensions: required_extensions,
-        ..Default::default()
-    }).unwrap();
+    let instance = Instance::new(
+        library,
+        InstanceCreateInfo {
+            enabled_extensions: required_extensions,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     let surface = WindowBuilder::new()
-        .with_title("Vulkan Modular Engine")
+        .with_title(title)
         .build_vk_surface(event_loop, instance.clone())
         .unwrap();
 
-    let window = surface.object().unwrap().clone().downcast::<Window>().unwrap();
+    let window = surface
+        .object()
+        .unwrap()
+        .clone()
+        .downcast::<Window>()
+        .unwrap();
 
     let device_extensions = DeviceExtensions {
         khr_swapchain: true,
@@ -48,22 +59,34 @@ pub fn init_vulkan(event_loop: &EventLoop<()>) -> VulkanBase {
         .unwrap()
         .filter(|p| p.supported_extensions().contains(&device_extensions))
         .filter_map(|p| {
-            p.queue_family_properties().iter().enumerate().position(|(i, q)| {
-                q.queue_flags.intersects(QueueFlags::GRAPHICS) && 
-                p.surface_support(i as u32, &surface).unwrap_or(false)
-            }).map(|i| (p, i as u32))
+            p.queue_family_properties()
+                .iter()
+                .enumerate()
+                .position(|(i, q)| {
+                    q.queue_flags.intersects(QueueFlags::GRAPHICS)
+                        && p.surface_support(i as u32, &surface).unwrap_or(false)
+                })
+                .map(|i| (p, i as u32))
         })
         .min_by_key(|(p, _)| match p.properties().device_type {
             PhysicalDeviceType::DiscreteGpu => 0,
             PhysicalDeviceType::IntegratedGpu => 1,
             _ => 2,
-        }).unwrap();
+        })
+        .unwrap();
 
-    let (device, mut queues) = Device::new(physical_device, DeviceCreateInfo {
-        enabled_extensions: device_extensions,
-        queue_create_infos: vec![QueueCreateInfo { queue_family_index, ..Default::default() }],
-        ..Default::default()
-    }).unwrap();
+    let (device, mut queues) = Device::new(
+        physical_device,
+        DeviceCreateInfo {
+            enabled_extensions: device_extensions,
+            queue_create_infos: vec![QueueCreateInfo {
+                queue_family_index,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     let queue = queues.next().unwrap();
 

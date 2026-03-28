@@ -1,18 +1,19 @@
-use crate::shapes::Mesh;
+use crate::geometry::Mesh;
 use crate::scene::animation::AnimationType;
 use nalgebra::{Matrix4, Rotation3, Vector3};
-use vulkano::image::{ImageAccess, view::ImageView};
 use std::sync::Arc;
+use vulkano::image::{view::ImageView, ImageAccess};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct InstanceData {
     pub model: [[f32; 4]; 4], // 64 bytes
-    pub color: [f32; 4],       // 16 bytes, color + emission 
+    pub color: [f32; 4],      // 16 bytes, color + emission
     pub mat_props: [f32; 4],  // 16 bytes
-    pub velocity: [f32; 4],   // 16 bytes z and w are not used now
-    pub physic: [f32; 4] // 16 bytes
-    // Total 124            bytes
+    pub velocity: [f32; 4],   // 16 bytes
+    pub physic: [f32; 4],     // 16 bytes
+    pub rotation: [f32; 4],   // 16 bytes
+                              // Total 144 bytes
 }
 
 #[repr(C)]
@@ -20,14 +21,14 @@ pub struct InstanceData {
 pub struct PhysicsPushConstants {
     pub dt: f32,
     pub object_count: u32,
-    pub solid_count: u32
+    pub solid_count: u32,
 }
 
 #[derive(Clone)]
 pub struct Instance {
     pub color: [f32; 3],
     pub emissive: f32,
-    pub roughness: f32,    
+    pub roughness: f32,
     pub metalness: f32,
     pub base_color_texture: Option<usize>,
     pub metallic_roughness_texture: Option<usize>,
@@ -37,14 +38,20 @@ pub struct Instance {
     pub mass: f32,
     pub collision: f32,
     pub gravity: f32,
+    pub rotation: [f32; 4],
 }
 
 impl Default for Instance {
     fn default() -> Self {
         Self {
             animation: AnimationType::Static,
-            velocity:[0.0, 0.0, 0.0, 1.0],
-            model_matrix: [[1.0, 0.0, 0.0, 0.0],[0.0, 1.0, 0.0, 0.0],[0.0, 0.0, 1.0, 0.0],[0.0, 0.0, 0.0, 1.0]], 
+            velocity: [0.0, 0.0, 0.0, 1.0],
+            model_matrix: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
             color: [1.0, 1.0, 1.0],
             emissive: 0.0,
             base_color_texture: None,
@@ -54,6 +61,7 @@ impl Default for Instance {
             mass: 1.0,
             collision: 0.0,
             gravity: 1.0,
+            rotation: [0.0, 0.0, 0.0, 0.0],
         }
     }
 }
@@ -67,9 +75,9 @@ pub struct Texture {
 // ! TRANSFORM - Position, rotation, and scale of an object
 #[derive(Copy, Clone, Debug)]
 pub struct Transform {
-    pub position: [f32; 3],  // Translation in world space
-    pub rotation: [f32; 3],   // Euler angles, but I like Quaternions, but its complex as hell to implement it everywhere, but I sure that I will do this soon(maybe later then soon)
-    pub scale: [f32; 3],      // Scale factors
+    pub position: [f32; 3], // Translation in world space
+    pub rotation: [f32; 3], // Euler angles, but I like Quaternions, but its complex as hell to implement it everywhere, but I sure that I will do this soon(maybe later then soon)
+    pub scale: [f32; 3],    // Scale factors
 }
 
 // * It can be used to create a new objects or set default settings, like in blender 'reset transform' or something like that
@@ -86,17 +94,15 @@ impl Default for Transform {
 impl Transform {
     pub fn to_matrix(&self) -> [[f32; 4]; 4] {
         let translation = Matrix4::new_translation(&Vector3::from(self.position));
-        
-        let rotation = Rotation3::from_euler_angles(
-            self.rotation[0], 
-            self.rotation[1], 
-            self.rotation[2]
-        ).to_homogeneous();
-        
+
+        let rotation =
+            Rotation3::from_euler_angles(self.rotation[0], self.rotation[1], self.rotation[2])
+                .to_homogeneous();
+
         let scale = Matrix4::new_nonuniform_scaling(&Vector3::from(self.scale));
-        
+
         let model_matrix = translation * rotation * scale;
-        
+
         model_matrix.into()
     }
     pub fn from_matrix(m: Matrix4<f32>) -> Self {
@@ -109,13 +115,18 @@ impl Transform {
         ];
 
         let rotation_matrix = nalgebra::Matrix3::new(
-            m[(0, 0)] / scale[0], m[(0, 1)] / scale[1], m[(0, 2)] / scale[2],
-            m[(1, 0)] / scale[0], m[(1, 1)] / scale[1], m[(1, 2)] / scale[2],
-            m[(2, 0)] / scale[0], m[(2, 1)] / scale[1], m[(2, 2)] / scale[2],
+            m[(0, 0)] / scale[0],
+            m[(0, 1)] / scale[1],
+            m[(0, 2)] / scale[2],
+            m[(1, 0)] / scale[0],
+            m[(1, 1)] / scale[1],
+            m[(1, 2)] / scale[2],
+            m[(2, 0)] / scale[0],
+            m[(2, 1)] / scale[1],
+            m[(2, 2)] / scale[2],
         );
 
-        let rotation = Rotation3::from_matrix_unchecked(rotation_matrix)
-            .euler_angles();
+        let rotation = Rotation3::from_matrix_unchecked(rotation_matrix).euler_angles();
 
         Self {
             position,

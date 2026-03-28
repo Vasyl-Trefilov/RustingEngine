@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Three.js vs Vulkano Engine</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+      }
+      canvas {
+        display: block;
+      }
+      #info {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        color: white;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">FPS: <span id="fps">0</span></div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from "three";
+      import * as CANNON from "cannon-es";
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(
+        45,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000,
+      );
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      camera.position.set(0, 5, 40);
+
+      const world = new CANNON.World();
+      world.gravity.set(0, -9.82, 0);
+
+      const light = new THREE.PointLight(0xfff2e6, 450, 1000);
+      light.position.set(30, 30, 30);
+      scene.add(light);
+      scene.add(new THREE.AmbientLight(0x404040));
+
+      const redMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+      const greenMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+
+      const objects = [];
+
+      const cubeGeo = new THREE.BoxGeometry(1, 1, 1);
+      const cubeShape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
+
+      for (let i = 0; i < 10; i++) {
+        for (let j = 0; j < 3; j++) {
+          for (let k = 0; k < 10; k++) {
+            const x = i * 1.5;
+            const y = j * 2.0 + 7.0;
+            const z = k * 1.5;
+
+            const mesh = new THREE.Mesh(cubeGeo, redMaterial);
+            scene.add(mesh);
+
+            const body = new CANNON.Body({
+              mass: 1,
+              shape: cubeShape,
+              position: new CANNON.Vec3(x, y, z),
+            });
+            world.addBody(body);
+
+            objects.push({ mesh, body });
+          }
+        }
+      }
+
+      const radius = 7.5;
+      const sphereGeo = new THREE.SphereGeometry(radius, 32, 32);
+      const sphereMesh = new THREE.Mesh(sphereGeo, greenMaterial);
+      scene.add(sphereMesh);
+
+      const sphereShape = new CANNON.Sphere(radius);
+      const sphereBody = new CANNON.Body({
+        mass: 100000,
+        shape: sphereShape,
+        position: new CANNON.Vec3(7, 100, 7),
+      });
+      world.addBody(sphereBody);
+      objects.push({ mesh: sphereMesh, body: sphereBody });
+
+      const groundBody = new CANNON.Body({ mass: 0 });
+      groundBody.addShape(new CANNON.Plane());
+      groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+      world.addBody(groundBody);
+
+      let lastTime = performance.now();
+      const fpsSpan = document.getElementById("fps");
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        const time = performance.now();
+        const dt = (time - lastTime) / 1000;
+        lastTime = time;
+
+        world.step(1 / 60, dt);
+
+        for (const obj of objects) {
+          obj.mesh.position.copy(obj.body.position);
+          obj.mesh.quaternion.copy(obj.body.quaternion);
+        }
+
+        renderer.render(scene, camera);
+
+        fpsSpan.innerText = Math.round(1 / dt);
+      }
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      animate();
+    </script>
+  </body>
+</html>

@@ -1,9 +1,8 @@
-use vulkano::memory::allocator::StandardMemoryAllocator;
-use crate::shapes::Mesh;
-use std::sync::Arc;
+use crate::geometry::Mesh;
+use crate::scene::object::Instance;
 use crate::scene::object::Texture;
-
-use crate::Instance;
+use std::sync::Arc;
+use vulkano::memory::allocator::StandardMemoryAllocator;
 
 pub fn load_gltf_scene(
     allocator: &Arc<StandardMemoryAllocator>,
@@ -57,17 +56,17 @@ fn process_node(
             };
 
             let material = primitive.material();
-			let pbr = material.pbr_metallic_roughness();
+            let pbr = material.pbr_metallic_roughness();
 
-			// Base color (RGBA)
-			let base_color = pbr.base_color_factor();
+            // Base color (RGBA)
+            let base_color = pbr.base_color_factor();
 
-			// Convert to RGB, bc I am bitch and I havent done alpha
-			let color = [base_color[0], base_color[1], base_color[2]];
+            // Convert to RGB, bc I am bitch and I havent done alpha
+            let color = [base_color[0], base_color[1], base_color[2]];
 
-			// Metallic / roughness
-			let metalness = pbr.metallic_factor();
-			let roughness = pbr.roughness_factor();
+            // Metallic / roughness
+            let metalness = pbr.metallic_factor();
+            let roughness = pbr.roughness_factor();
             let base_color_texture = pbr.base_color_texture().map(|info| {
                 let tex = info.texture();
                 let img = &images[tex.source().index()];
@@ -98,9 +97,9 @@ fn process_node(
             });
             mesh.base_color_texture = base_color_texture.map(|idx| idx + 1);
 
-			let instance = Instance {
+            let instance = Instance {
                 model_matrix: Transform::from_matrix(global_transform).to_matrix(),
-                color,               
+                color,
                 roughness,
                 metalness,
                 base_color_texture,
@@ -126,27 +125,25 @@ fn process_node(
     }
 }
 
-use crate::shapes::VertexPosColorUv;
+use crate::geometry::VertexPosColorUv;
 
 fn extract_primitive(
     primitive: &gltf::Primitive,
     buffers: &Vec<gltf::buffer::Data>,
 ) -> (Vec<VertexPosColorUv>, Option<Vec<u32>>) {
-
     let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
 
-    let positions: Vec<[f32; 3]> =
-        reader.read_positions().unwrap().collect();
+    let positions: Vec<[f32; 3]> = reader.read_positions().unwrap().collect();
 
-    let normals: Vec<[f32; 3]> =
-        reader.read_normals()
-            .map(|n| n.collect())
-            .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+    let normals: Vec<[f32; 3]> = reader
+        .read_normals()
+        .map(|n| n.collect())
+        .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
 
-    let tex_coords: Vec<[f32; 2]> =
-        reader.read_tex_coords(0)
-            .map(|tc| tc.into_f32().collect())
-            .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+    let tex_coords: Vec<[f32; 2]> = reader
+        .read_tex_coords(0)
+        .map(|tc| tc.into_f32().collect())
+        .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
     let indices = reader
         .read_indices()

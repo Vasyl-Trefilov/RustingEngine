@@ -1,11 +1,11 @@
-use winit::event::VirtualKeyCode;
 use std::collections::HashSet;
+use winit::event::VirtualKeyCode;
 use winit::window::CursorGrabMode;
 
-// ! MOUSE 
+// ! MOUSE
 #[derive(Clone, Copy, Debug)]
 pub struct MouseState {
-    position: (f32, f32),      // Normalized coordinates (-1 to 1), so its like a vulkan type
+    position: (f32, f32), // Normalized coordinates (-1 to 1), so its like a vulkan type
     pixel_position: (f32, f32), // Pixel coordinates, like from 0 to 1900
     left_clicked: bool,
     right_clicked: bool,
@@ -44,11 +44,11 @@ impl Default for InputState {
         Self {
             keys_pressed: std::collections::HashSet::new(),
             mouse_delta: [0.0, 0.0],
-            mouse_captured: false, 
+            mouse_captured: false,
             last_mouse_pos: [0.0, 0.0],
             is_mouse_dragging: false,
             sprint: 2.0,
-            speed: 0.02
+            speed: 0.02,
         }
     }
 }

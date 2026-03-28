@@ -3,22 +3,6 @@
 version = 4
 
 [[package]]
-name = "RustingEngine"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "gltf",
- "nalgebra",
- "rand",
- "rayon",
- "smallvec",
- "vulkano",
- "vulkano-shaders",
- "vulkano-win",
- "winit",
-]
-
-[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1365,6 +1349,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "921904a62e410e37e215c40381b7117f830d9d89ba60ab5236170541dd25646b"
 dependencies = [
  "xmlparser",
+]
+
+[[package]]
+name = "rusting_engine"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "gltf",
+ "nalgebra",
+ "rand",
+ "rayon",
+ "smallvec",
+ "vulkano",
+ "vulkano-shaders",
+ "vulkano-win",
+ "winit",
 ]
 
 [[package]]

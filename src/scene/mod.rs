@@ -1,11 +1,18 @@
 pub mod animation;
 pub mod object;
 
+use crate::scene::object::PhysicsPushConstants;
+use rayon::prelude::*;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
+use vulkano::command_buffer::allocator::{
+    StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
+};
+use vulkano::command_buffer::RenderPassBeginInfo;
+use vulkano::command_buffer::SubpassContents;
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, CopyBufferInfoTyped, PrimaryAutoCommandBuffer,
+    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, CopyBufferInfoTyped,
+    PrimaryAutoCommandBuffer,
 };
 use vulkano::descriptor_set::{
     allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -15,23 +22,19 @@ use vulkano::format::Format;
 use vulkano::image::view::ImageView;
 use vulkano::image::ImmutableImage;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator};
+use vulkano::pipeline::graphics::viewport::Viewport;
+use vulkano::pipeline::ComputePipeline;
 use vulkano::pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint};
+use vulkano::render_pass::Framebuffer;
 use vulkano::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode};
 use vulkano::sync::GpuFuture;
-use vulkano::pipeline::ComputePipeline;
-use crate::scene::object::PhysicsPushConstants;
-use vulkano::render_pass::Framebuffer;
-use vulkano::command_buffer::RenderPassBeginInfo;
-use vulkano::command_buffer::SubpassContents;
-use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::DeviceSize;
-use rayon::prelude::*;
 
+use crate::geometry::Mesh;
 use crate::input::MouseState;
-use crate::renderer::pipeline::UniformBufferObject;
+use crate::rendering::pipeline::UniformBufferObject;
 use crate::scene::animation::AnimationType;
-use crate::scene::object::{Instance, InstanceData, RenderBatch, Texture};
-use crate::shapes::Mesh;
+use crate::scene::object::{Instance, InstanceData, RenderBatch, Texture, Transform};
 
 pub struct RenderScene {
     // pub max_instances: usize,
@@ -104,7 +107,8 @@ impl RenderScene {
         max_instances: usize,
     ) -> Self {
         let mut frames = Vec::new();
-        let default_texture = Self::create_texture_image(memory_allocator, queue, &[255, 255, 255, 255], 1, 1);
+        let default_texture =
+            Self::create_texture_image(memory_allocator, queue, &[255, 255, 255, 255], 1, 1);
         let default_texture_view = ImageView::new_default(default_texture).unwrap();
         let texture_sampler = Sampler::new(
             queue.device().clone(),
@@ -119,36 +123,51 @@ impl RenderScene {
         )
         .unwrap();
 
-        let physics_read = Buffer::new_slice::<InstanceData>(  
+        let physics_read = Buffer::new_slice::<InstanceData>(
             memory_allocator,
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST | BufferUsage::TRANSFER_SRC,
+                usage: BufferUsage::STORAGE_BUFFER
+                    | BufferUsage::TRANSFER_DST
+                    | BufferUsage::TRANSFER_SRC,
                 ..Default::default()
             },
             AllocationCreateInfo {
                 usage: MemoryUsage::DeviceOnly,
                 ..Default::default()
             },
-            max_instances as u64, ).unwrap();
-        let physics_write = Buffer::new_slice::<InstanceData>(  
+            max_instances as u64,
+        )
+        .unwrap();
+        let physics_write = Buffer::new_slice::<InstanceData>(
             memory_allocator,
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST | BufferUsage::TRANSFER_SRC, 
+                usage: BufferUsage::STORAGE_BUFFER
+                    | BufferUsage::TRANSFER_DST
+                    | BufferUsage::TRANSFER_SRC,
                 ..Default::default()
             },
             AllocationCreateInfo {
                 usage: MemoryUsage::DeviceOnly,
                 ..Default::default()
             },
-            max_instances as u64, ).unwrap();
+            max_instances as u64,
+        )
+        .unwrap();
 
         for _ in 0..frames_in_flight {
             let uniform_buffer = Buffer::from_data(
                 memory_allocator,
-                BufferCreateInfo { usage: BufferUsage::UNIFORM_BUFFER, ..Default::default() },
-                AllocationCreateInfo { usage: MemoryUsage::Upload, ..Default::default() },
+                BufferCreateInfo {
+                    usage: BufferUsage::UNIFORM_BUFFER,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    usage: MemoryUsage::Upload,
+                    ..Default::default()
+                },
                 UniformBufferObject::default(),
-            ).unwrap();
+            )
+            .unwrap();
 
             frames.push(FrameData { uniform_buffer });
         }
@@ -156,9 +175,11 @@ impl RenderScene {
         let mut scene = Self {
             batches: Vec::new(),
             frames,
-            light_pos:[0.0, 10.0, 0.0], light_color: [1.0, 1.0, 1.0], light_intensity: 50.0,
-            texture_views: vec![/* default view */],
-            texture_sampler, 
+            light_pos: [0.0, 10.0, 0.0],
+            light_color: [1.0, 1.0, 1.0],
+            light_intensity: 50.0,
+            texture_views: vec![default_texture_view],
+            texture_sampler,
             descriptor_set_allocator: descriptor_set_allocator.clone(),
             descriptor_sets: vec![Vec::new(); frames_in_flight],
             total_instances: 0,
@@ -169,52 +190,84 @@ impl RenderScene {
     }
 
     pub fn upload_to_gpu(&mut self, allocator: &Arc<StandardMemoryAllocator>, queue: &Arc<Queue>) {
-        let mut flat_data = Vec::new();
+        let total_instances: usize = self.batches.iter().map(|batch| batch.instances.len()).sum();
+
+        self.total_instances = total_instances as u32;
+        if total_instances == 0 {
+            return;
+        }
+
+        let mut flat_data = Vec::with_capacity(total_instances);
         for batch in &self.batches {
             for inst in &batch.instances {
                 flat_data.push(InstanceData {
                     model: inst.model_matrix,
                     color: [inst.color[0], inst.color[1], inst.color[2], inst.emissive],
-                    mat_props: [inst.roughness, inst.metalness, 0.0,0.0],
-                    physic: [inst.collision, inst.mass, inst.gravity, 0.0],
-                    velocity: inst.velocity,
+                    mat_props: [inst.roughness, inst.metalness, 0.0, 0.0],
+                    physic: [inst.collision, inst.mass, inst.gravity, 0.0], // * x - collision type, y - mass, z - gravity power, w - nothing yet
+                    velocity: inst.velocity, // * x, y and z is velocity and w for collision radius, this decision was made for performance
+                    rotation: inst.rotation,
                 });
             }
         }
-        self.total_instances = flat_data.len() as u32;
-        if self.total_instances == 0 { return; }
+
+        let device = queue.device();
 
         let staging = Buffer::from_iter(
             allocator,
-            BufferCreateInfo { usage: BufferUsage::TRANSFER_SRC, ..Default::default() },
-            AllocationCreateInfo { usage: MemoryUsage::Upload, ..Default::default() },
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::Upload,
+                ..Default::default()
+            },
             flat_data,
-        ).unwrap();
+        )
+        .unwrap();
 
+        let cmd_allocator = StandardCommandBufferAllocator::new(device.clone(), Default::default());
         let mut builder = AutoCommandBufferBuilder::primary(
-            &StandardCommandBufferAllocator::new(queue.device().clone(), Default::default()),
+            &cmd_allocator,
             queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
-        ).unwrap();
+        )
+        .unwrap();
 
-        builder.copy_buffer(CopyBufferInfoTyped::buffers(
-            staging.clone(),
-            self.physics_read.clone().slice(0..self.total_instances as u64)
-        )).unwrap();builder.copy_buffer(CopyBufferInfoTyped::buffers(
-            staging,
-            self.physics_write.clone().slice(0..self.total_instances as u64)
-        )).unwrap();
+        let copy_count = self.total_instances as u64;
+        builder
+            .copy_buffer(CopyBufferInfoTyped::buffers(
+                staging.clone(),
+                self.physics_read.clone().slice(0..copy_count),
+            ))
+            .unwrap();
+
+        builder
+            .copy_buffer(CopyBufferInfoTyped::buffers(
+                staging,
+                self.physics_write.clone().slice(0..copy_count),
+            ))
+            .unwrap();
 
         let cmd = builder.build().unwrap();
-        vulkano::sync::now(queue.device().clone())
-            .then_execute(queue.clone(), cmd).unwrap()
-            .then_signal_fence_and_flush().unwrap()
-            .wait(None).unwrap();
+
+        vulkano::sync::now(device.clone())
+            .then_execute(queue.clone(), cmd)
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
     }
 
-    pub fn ensure_descriptor_cache(&mut self, pipeline: &Arc<GraphicsPipeline>, target_tex_count: usize) {
+    pub fn ensure_descriptor_cache(
+        &mut self,
+        pipeline: &Arc<GraphicsPipeline>,
+        target_tex_count: usize,
+    ) {
         let layout = pipeline.layout().set_layouts()[0].clone();
-        
+
         for (frame_i, frame) in self.frames.iter().enumerate() {
             let total_sets_needed = target_tex_count * 2;
 
@@ -228,22 +281,34 @@ impl RenderScene {
                 // Buffer read
                 let set_a = PersistentDescriptorSet::new(
                     &self.descriptor_set_allocator,
-                    layout.clone(), [
-                        WriteDescriptorSet::buffer(0, frame.uniform_buffer.clone()), 
-                        WriteDescriptorSet::image_view_sampler(1, self.texture_views[tex_idx].clone(), self.texture_sampler.clone()),
-                        WriteDescriptorSet::buffer(2, self.physics_read.clone())
+                    layout.clone(),
+                    [
+                        WriteDescriptorSet::buffer(0, frame.uniform_buffer.clone()),
+                        WriteDescriptorSet::image_view_sampler(
+                            1,
+                            self.texture_views[tex_idx].clone(),
+                            self.texture_sampler.clone(),
+                        ),
+                        WriteDescriptorSet::buffer(2, self.physics_read.clone()),
                     ],
-                ).unwrap();
+                )
+                .unwrap();
 
                 // Buffer write
                 let set_b = PersistentDescriptorSet::new(
                     &self.descriptor_set_allocator,
-                    layout.clone(), [
-                        WriteDescriptorSet::buffer(0, frame.uniform_buffer.clone()), 
-                        WriteDescriptorSet::image_view_sampler(1, self.texture_views[tex_idx].clone(), self.texture_sampler.clone()),
-                        WriteDescriptorSet::buffer(2, self.physics_write.clone())
+                    layout.clone(),
+                    [
+                        WriteDescriptorSet::buffer(0, frame.uniform_buffer.clone()),
+                        WriteDescriptorSet::image_view_sampler(
+                            1,
+                            self.texture_views[tex_idx].clone(),
+                            self.texture_sampler.clone(),
+                        ),
+                        WriteDescriptorSet::buffer(2, self.physics_write.clone()),
                     ],
-                ).unwrap();
+                )
+                .unwrap();
 
                 self.descriptor_sets[frame_i].push(set_a);
                 self.descriptor_sets[frame_i].push(set_b);
@@ -259,41 +324,57 @@ impl RenderScene {
         physics_buffer_index: usize, // Pass 0 for Read, 1 for Write
     ) {
         let mut current_offset = 0;
-        
+
         for batch in &self.batches {
             let count = batch.instances.len() as u32;
-            if count == 0 { continue; }
+            if count == 0 {
+                continue;
+            }
 
             builder.bind_vertex_buffers(0, (batch.mesh.vertices.clone(),));
-            
+
             let requested_tex = batch.mesh.base_color_texture.unwrap_or(0);
-            
-            // Calculate the descriptor: 
+
+            // Calculate the descriptor:
             // Tex 0 starts at 0 (Buffer A) and 1 (Buffer B)
             // Tex 1 starts at 2 (Buffer A) and 3 (Buffer B)
             let descriptor_idx = (requested_tex * 2) + physics_buffer_index;
 
             builder.bind_descriptor_sets(
-                PipelineBindPoint::Graphics, 
-                pipeline.layout().clone(), 
-                0, 
-                self.descriptor_sets[frame_index][descriptor_idx].clone()
+                PipelineBindPoint::Graphics,
+                pipeline.layout().clone(),
+                0,
+                self.descriptor_sets[frame_index][descriptor_idx].clone(),
             );
 
             if let Some(indices) = &batch.mesh.indices {
                 builder.bind_index_buffer(indices.clone());
-                builder.draw_indexed(batch.mesh.index_count, count, 0, 0, current_offset).unwrap();
+                builder
+                    .draw_indexed(batch.mesh.index_count, count, 0, 0, current_offset)
+                    .unwrap();
             } else {
-                builder.draw(batch.mesh.vertex_count, count, 0, current_offset).unwrap();
+                builder
+                    .draw(batch.mesh.vertex_count, count, 0, current_offset)
+                    .unwrap();
             }
-            
+
             current_offset += count;
         }
     }
-    pub fn prepare_frame_ubo(&mut self, frame_index: usize, view: [[f32; 4]; 4], proj: [[f32; 4]; 4], eye_pos:[f32; 3]) {
+    pub fn prepare_frame_ubo(
+        &mut self,
+        frame_index: usize,
+        view: [[f32; 4]; 4],
+        proj: [[f32; 4]; 4],
+        eye_pos: [f32; 3],
+    ) {
         let mut ubo = self.frames[frame_index].uniform_buffer.write().unwrap();
-        ubo.view = view; ubo.proj = proj; ubo.eye_pos = eye_pos;
-        ubo.light_pos = self.light_pos; ubo.light_color = self.light_color; ubo.light_intensity = self.light_intensity;
+        ubo.view = view;
+        ubo.proj = proj;
+        ubo.eye_pos = eye_pos;
+        ubo.light_pos = self.light_pos;
+        ubo.light_color = self.light_color;
+        ubo.light_intensity = self.light_intensity;
     }
 
     fn create_texture_image(
@@ -363,7 +444,13 @@ impl RenderScene {
                 continue;
             }
             let pixels_rgba = Self::to_rgba8(tex);
-            let image = Self::create_texture_image(memory_allocator, queue, &pixels_rgba, tex.width, tex.height);
+            let image = Self::create_texture_image(
+                memory_allocator,
+                queue,
+                &pixels_rgba,
+                tex.width,
+                tex.height,
+            );
             let view = ImageView::new_default(image).unwrap();
             self.texture_views.push(view);
         }
@@ -378,38 +465,41 @@ impl RenderScene {
 }
 
 pub fn record_compute_physics(
-    builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, 
+    builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     compute_pipeline: &Arc<ComputePipeline>,
     compute_set: &Arc<PersistentDescriptorSet>,
     total_objects: u32,
     dt: f32,
-    solid_count: u32
+    solid_count: u32,
 ) {
     let workgroups_x = (total_objects + 255) / 256;
     builder
         .bind_pipeline_compute(compute_pipeline.clone())
         .bind_descriptor_sets(
-            PipelineBindPoint::Compute, 
-            compute_pipeline.layout().clone(), 
-            0, 
-            compute_set.clone()
+            PipelineBindPoint::Compute,
+            compute_pipeline.layout().clone(),
+            0,
+            compute_set.clone(),
         )
         .push_constants(
-            compute_pipeline.layout().clone(), 
-            0, 
-            PhysicsPushConstants { dt, object_count: total_objects, solid_count }
+            compute_pipeline.layout().clone(),
+            0,
+            PhysicsPushConstants {
+                dt,
+                object_count: total_objects,
+                solid_count,
+            },
         )
         .dispatch([workgroups_x, 1, 1])
         .unwrap();
-
 }
 
 pub fn begin_render_pass_only(
-    builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, 
-    framebuffers: &[Arc<Framebuffer>], 
-    img_index: u32, 
-    dims: [u32; 2], 
-    pipeline: &Arc<GraphicsPipeline>
+    builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    framebuffers: &[Arc<Framebuffer>],
+    img_index: u32,
+    dims: [u32; 2],
+    pipeline: &Arc<GraphicsPipeline>,
 ) {
     builder
         .begin_render_pass(
@@ -422,11 +512,14 @@ pub fn begin_render_pass_only(
             },
             SubpassContents::Inline,
         )
-        .unwrap() 
-        .set_viewport(0, vec![Viewport {
-            origin: [0.0, 0.0],
-            dimensions: [dims[0] as f32, dims[1] as f32],
-            depth_range: 0.0..1.0,
-        }])
+        .unwrap()
+        .set_viewport(
+            0,
+            vec![Viewport {
+                origin: [0.0, 0.0],
+                dimensions: [dims[0] as f32, dims[1] as f32],
+                depth_range: 0.0..1.0,
+            }],
+        )
         .bind_pipeline_graphics(pipeline.clone());
 }
