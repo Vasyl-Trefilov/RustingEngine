@@ -1,9 +1,12 @@
+use crate::rendering::shader_registry::ShaderType;
+
 #[derive(Clone, Debug)]
 pub struct Material {
     pub color: [f32; 3],
     pub emissive: f32,
     pub roughness: f32,
     pub metalness: f32,
+    pub shader: ShaderType,
 }
 
 impl Default for Material {
@@ -13,6 +16,7 @@ impl Default for Material {
             emissive: 0.0,
             roughness: 0.5,
             metalness: 0.0,
+            shader: ShaderType::Pbr,
         }
     }
 }
@@ -28,6 +32,7 @@ pub struct MaterialBuilder {
     emissive: f32,
     roughness: f32,
     metalness: f32,
+    shader: ShaderType,
 }
 
 impl Default for MaterialBuilder {
@@ -37,6 +42,7 @@ impl Default for MaterialBuilder {
             emissive: 0.0,
             roughness: 0.5,
             metalness: 0.0,
+            shader: ShaderType::Pbr,
         }
     }
 }
@@ -62,12 +68,18 @@ impl MaterialBuilder {
         self
     }
 
+    pub fn shader(mut self, s: ShaderType) -> Self {
+        self.shader = s;
+        self
+    }
+
     pub fn build(self) -> Material {
         Material {
             color: self.color,
             emissive: self.emissive,
             roughness: self.roughness,
             metalness: self.metalness,
+            shader: self.shader,
         }
     }
 }

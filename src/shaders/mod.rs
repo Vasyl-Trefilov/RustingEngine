@@ -25,17 +25,518 @@ pub mod cs1 {
 
         layout(push_constant) uniform PushConstants {
             float dt;
-            uint object_count;
+            uint total_objects;
+            uint offset;
+            uint count;
         } pc;
 
         void main() {
-            uint i = gl_GlobalInvocationID.x;
-            if (i >= pc.object_count) return;
-            write_buf.data[i].model[0] += 0.0; // its not useless, just trust me, without this shit, nothing will work, bc its not creating a binding, if you delete this, it will crash and say, that there is no binding 1
-            InstanceData me = read_buf.data[i];
-            // write_buf.data[i] = me;
+            uint i = gl_GlobalInvocationID.x + pc.offset;
+            if (i >= pc.offset + pc.count) return;
+            write_buf.data[i] = read_buf.data[i];
         }
         ",
+    }
+}
+
+/// This is maximal available compute shaders with all possible physic functions
+pub mod cs_max {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        src: "
+       #version 450
+
+        layout(local_size_x = 256) in;
+
+        struct InstanceData {
+            mat4 model;
+            vec4 color;
+            vec4 mat_props;
+            vec4 velocity;
+            vec4 physic;
+            vec4 rotation;
+        };
+
+        layout(std430, set = 0, binding = 0) readonly buffer ReadBuffer {
+            InstanceData data[];
+        } read_buf;
+
+        layout(std430, set = 0, binding = 1) writeonly buffer WriteBuffer {
+            InstanceData data[];
+        } write_buf;
+
+        layout(push_constant) uniform PushConstants {
+            float dt;
+            uint total_objects;
+            uint offset;
+            uint count;
+        } pc;
+
+        mat3 skew(vec3 v) {
+            return mat3(
+                0.0,  v.z, -v.y,
+               -v.z,  0.0,  v.x,
+                v.y, -v.x,  0.0
+            );
+        }
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x + pc.offset;
+            if (i >= pc.offset + pc.count) return;
+
+            InstanceData me = read_buf.data[i];
+            float mass = me.physic.y;
+            if (mass <= 0.0) {
+                write_buf.data[i] = me;
+                return;
+            }
+
+            vec3 pos = me.model[3].xyz;
+            vec3 vel = me.velocity.xyz;
+            vec3 ang_vel = me.rotation.xyz;
+            float type = me.physic.x; 
+            float dt = pc.dt;
+
+            vec3 scaleA = vec3(length(me.model[0].xyz), length(me.model[1].xyz), length(me.model[2].xyz));
+            vec3 halfA = scaleA * 0.5; 
+            mat3 rotA = mat3(me.model[0].xyz / scaleA.x, me.model[1].xyz / scaleA.y, me.model[2].xyz / scaleA.z);
+
+            // Gravity
+            vel.y -= 9.81 * me.physic.z * dt;
+            pos += vel * dt;
+
+            // Rotation apply
+            if (length(ang_vel) > 0.001) {
+                rotA += skew(ang_vel) * rotA * dt;
+                vec3 c0 = normalize(rotA[0]);
+                vec3 c1 = normalize(rotA[1] - dot(c0, rotA[1]) * c0);
+                vec3 c2 = cross(c0, c1);
+                rotA = mat3(c0, c1, c2);
+            }
+
+            // Collision Loop
+            for (uint j = 0; j < pc.total_objects; ++j) {
+                if (i == j) continue;
+
+                InstanceData other = read_buf.data[j];
+                vec3 o_pos = other.model[3].xyz;
+                vec3 delta = o_pos - pos;
+                
+                vec3 o_scale = vec3(length(other.model[0].xyz), length(other.model[1].xyz), length(other.model[2].xyz));
+                vec3 halfB = o_scale * 0.5;
+                float o_type = other.physic.x;
+
+                // This is used to correct sphere collision
+                float boundA = (type > 0.5) ? scaleA.x : length(halfA);
+                float boundB = (o_type > 0.5) ? o_scale.x : length(halfB);
+                if (dot(delta, delta) > pow(boundA + boundB, 2.0)) continue;
+
+                mat3 rotB = mat3(other.model[0].xyz / o_scale.x, other.model[1].xyz / o_scale.y, other.model[2].xyz / o_scale.z);
+                vec3 normal = vec3(0.0);
+                float overlap = 0.0;
+                vec3 world_contact = vec3(0.0);
+
+                // Sphere - Sphere
+                if (type > 0.5 && o_type > 0.5) {
+                    float d = length(delta);
+                    float sum_r = scaleA.x + o_scale.x; 
+                    if (d < sum_r) {
+                        normal = -delta / max(d, 0.0001); 
+                        overlap = sum_r - d;
+                        world_contact = pos - normal * scaleA.x;
+                    }
+                }
+                // Box - Box
+                else if (type < 0.5 && o_type < 0.5) {
+                    float min_overlap = 1e9;
+                    vec3 best_axis;
+                    bool separating = false;
+                    vec3 axes[15];
+                    axes[0] = rotA[0]; axes[1] = rotA[1]; axes[2] = rotA[2];
+                    axes[3] = rotB[0]; axes[4] = rotB[1]; axes[5] = rotB[2];
+                    axes[6] = cross(rotA[0], rotB[0]); axes[7] = cross(rotA[0], rotB[1]); axes[8] = cross(rotA[0], rotB[2]);
+                    axes[9] = cross(rotA[1], rotB[0]); axes[10] = cross(rotA[1], rotB[1]); axes[11] = cross(rotA[1], rotB[2]);
+                    axes[12] = cross(rotA[2], rotB[0]); axes[13] = cross(rotA[2], rotB[1]); axes[14] = cross(rotA[2], rotB[2]);
+
+                    for (int a = 0; a < 15; a++) {
+                        vec3 L = axes[a];
+                        float lenSq = dot(L, L);
+                        if (lenSq < 1e-6) continue; 
+                        L *= inversesqrt(lenSq); 
+                        float rA = halfA.x * abs(dot(rotA[0], L)) + halfA.y * abs(dot(rotA[1], L)) + halfA.z * abs(dot(rotA[2], L));
+                        float rB = halfB.x * abs(dot(rotB[0], L)) + halfB.y * abs(dot(rotB[1], L)) + halfB.z * abs(dot(rotB[2], L));
+                        float s = rA + rB - abs(dot(delta, L));
+                        if (s <= 0.0) { separating = true; break; }
+                        if (s < min_overlap) { min_overlap = s; best_axis = L; }
+                    }
+                    if (!separating) {
+                        overlap = min_overlap;
+                        normal = (dot(delta, best_axis) > 0.0) ? -best_axis : best_axis;
+                        
+                        // Check if the normal is aligned with any of our local faces
+                        vec3 local_n = transpose(rotA) * (-normal);
+                        if (abs(local_n.x) > 0.98) world_contact = pos + rotA[0] * (local_n.x * halfA.x);
+                        else if (abs(local_n.y) > 0.98) world_contact = pos + rotA[1] * (local_n.y * halfA.y);
+                        else if (abs(local_n.z) > 0.98) world_contact = pos + rotA[2] * (local_n.z * halfA.z);
+                        else {
+                            // Hit a corner or edge
+                            vec3 c_local = vec3(
+                                (local_n.x > 0.0) ? halfA.x : -halfA.x,
+                                (local_n.y > 0.0) ? halfA.y : -halfA.y,
+                                (local_n.z > 0.0) ? halfA.z : -halfA.z
+                            );
+                            world_contact = pos + rotA * c_local;
+                        }
+                    }
+                }
+                // Box - Sphere
+                else { 
+                    bool i_is_box = (type < 0.5);
+                    vec3 b_pos = i_is_box ? pos : o_pos;
+                    vec3 s_pos = i_is_box ? o_pos : pos;
+                    mat3 b_rot = i_is_box ? rotA : rotB;
+                    vec3 b_half = i_is_box ? halfA : halfB;
+                    float s_rad = i_is_box ? o_scale.x : scaleA.x;
+                    vec3 local_s = transpose(b_rot) * (s_pos - b_pos);
+                    vec3 closest = clamp(local_s, -b_half, b_half);
+                    vec3 local_delta = local_s - closest;
+                    float d = length(local_delta);
+
+                    if (d < s_rad && d > 0.0001) {
+                        overlap = s_rad - d;
+                        normal = b_rot * (local_delta / d);
+                        if (i_is_box) normal = -normal;
+                        world_contact = b_rot * closest + b_pos;
+                    }
+                }
+
+                if (overlap > 0.0) {
+                    float o_mass = max(other.physic.y, 0.001);
+                    float my_m = mass;
+                    float ot_m = o_mass;
+
+                    // If I am on top of the other object, make the other object essentially unmovable so I get pushed up.
+                    if (pos.y > o_pos.y + 0.1) { ot_m *= 10.0; }
+                    else if (o_pos.y > pos.y + 0.1) { my_m *= 10.0; }
+
+                    float total_m = my_m + ot_m;
+                    float ratio = ot_m / total_m;
+                    pos += normal * overlap * ratio * 0.95; // High correction factor
+
+                    // Impulse Math
+                    vec3 r_me = world_contact - pos;
+                    vec3 r_ot = world_contact - o_pos;
+                    float inertia = (type < 0.5) ? mass * dot(scaleA, scaleA) / 6.0 : 0.4 * mass * scaleA.x * scaleA.x;
+                    float o_inertia = (o_type < 0.5) ? o_mass * dot(o_scale, o_scale) / 6.0 : 0.4 * o_mass * o_scale.x * o_scale.x;
+
+                    vec3 v_rel = (vel + cross(ang_vel, r_me)) - (other.velocity.xyz + cross(other.rotation.xyz, r_ot));
+                    float v_sep = dot(v_rel, normal);
+
+                    if (v_sep < 0.0) {
+                        float K = (1.0/mass + 1.0/o_mass) + dot(normal, cross(cross(r_me, normal)/inertia, r_me)) + dot(normal, cross(cross(r_ot, normal)/o_inertia, r_ot));
+                        float j = -(1.1 * v_sep) / K; 
+                        vec3 impulse = j * normal;
+
+                        vel += impulse / mass;
+                        
+                        // Only add rotation if we aren't hitting the face center or if movement is fast
+                        if (overlap > 0.01 || abs(v_sep) > 0.1) {
+                             ang_vel += cross(r_me, impulse) / inertia;
+                        }
+
+                        // Friction
+                        v_rel = (vel + cross(ang_vel, r_me)) - (other.velocity.xyz + cross(other.rotation.xyz, r_ot));
+                        vec3 tangent = v_rel - dot(v_rel, normal) * normal;
+                        if (length(tangent) > 0.01) {
+                            vec3 t_dir = normalize(tangent);
+                            float Kt = (1.0/mass + 1.0/o_mass) + dot(t_dir, cross(cross(r_me, t_dir)/inertia, r_me)) + dot(t_dir, cross(cross(r_ot, t_dir)/o_inertia, r_ot));
+                            float jt = clamp(-dot(v_rel, t_dir) / Kt, -j * 0.5, j * 0.5);
+                            vec3 f_imp = jt * t_dir;
+                            vel += f_imp / mass;
+                            ang_vel += cross(r_me, f_imp) / inertia;
+                        }
+                    }
+                }
+            }
+
+            // Shader floor. Uses as backup
+            float lowest_y = (type > 0.5) ? scaleA.x : (halfA.x * abs(rotA[0].y) + halfA.y * abs(rotA[1].y) + halfA.z * abs(rotA[2].y));
+            if (pos.y < lowest_y) {
+                pos.y = lowest_y;
+                if (vel.y < 0.0) {
+                    vel.y *= -0.05; // Low bounce for stability
+                    vel.xz *= 0.8;
+                    ang_vel *= 0.7;
+                    
+                    // Tip over logic
+                    if (type < 0.5 && rotA[1].y < 0.99) {
+                        vec3 local_down = transpose(rotA) * vec3(0, -1, 0);
+                        vec3 edge = rotA * vec3((local_down.x > 0.0) ? halfA.x : -halfA.x, (local_down.y > 0.0) ? halfA.y : -halfA.y, (local_down.z > 0.0) ? halfA.z : -halfA.z);
+                        ang_vel += cross(edge, vec3(0, 1, 0)) * 2.0 * dt;
+                    }
+                }
+            }
+            
+            // Sleep logic to avoid infinity moving
+            if (length(vel) < 0.02 && length(ang_vel) < 0.02) {
+                vel = vec3(0,0,0);
+                ang_vel = vec3(0,0,0);
+            }
+
+            // Write back
+            write_buf.data[i].model[0] = vec4(rotA[0] * scaleA.x, 0.0);
+            write_buf.data[i].model[1] = vec4(rotA[1] * scaleA.y, 0.0);
+            write_buf.data[i].model[2] = vec4(rotA[2] * scaleA.z, 0.0);
+            write_buf.data[i].model[3] = vec4(pos, 1.0);
+            write_buf.data[i].velocity = vec4(vel, me.velocity.w);
+            write_buf.data[i].rotation = vec4(ang_vel, 0.0);
+            write_buf.data[i].color = me.color;
+            write_buf.data[i].mat_props = me.mat_props;
+            write_buf.data[i].physic = me.physic;
+        }
+        "
+    }
+}
+
+
+/// This is maximal available compute shaders with all possible physic functions
+pub mod cs_max_old {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        src: "
+        #version 450
+
+        layout(local_size_x = 256) in;
+
+        struct InstanceData {
+            mat4 model;
+            vec4 color;
+            vec4 mat_props;
+            vec4 velocity;
+            vec4 physic;
+            vec4 rotation;
+        };
+
+        layout(std430, set = 0, binding = 0) readonly buffer ReadBuffer {
+            InstanceData data[];
+        } read_buf;
+
+        layout(std430, set = 0, binding = 1) writeonly buffer WriteBuffer {
+            InstanceData data[];
+        } write_buf;
+
+        layout(push_constant) uniform PushConstants {
+            float dt;
+            uint total_objects;
+            uint offset;
+            uint count;
+        } pc;
+
+        mat3 skew(vec3 v) {
+            return mat3(
+                0.0,  v.z, -v.y,
+               -v.z,  0.0,  v.x,
+                v.y, -v.x,  0.0
+            );
+        }
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x + pc.offset;
+            if (i >= pc.offset + pc.count) return;
+
+            InstanceData me = read_buf.data[i];
+            float mass = me.physic.y;
+            if (mass <= 0.0) {
+                write_buf.data[i] = me;
+                return;
+            }
+
+            vec3 pos = me.model[3].xyz;
+            vec3 vel = me.velocity.xyz;
+            vec3 ang_vel = me.rotation.xyz;
+            float type = me.physic.x; 
+            float dt = pc.dt;
+
+            vec3 scaleA = vec3(length(me.model[0].xyz), length(me.model[1].xyz), length(me.model[2].xyz));
+            vec3 halfA = scaleA * 0.5; 
+            mat3 rotA = mat3(me.model[0].xyz / scaleA.x, me.model[1].xyz / scaleA.y, me.model[2].xyz / scaleA.z);
+
+            // Gravity
+            vel.y -= 9.81 * me.physic.z * dt;
+            pos += vel * dt;
+
+            // Rotate calc
+            if (length(ang_vel) > 0.001) {
+                rotA += skew(ang_vel) * rotA * dt;
+                vec3 c0 = normalize(rotA[0]);
+                vec3 c1 = normalize(rotA[1] - dot(c0, rotA[1]) * c0);
+                vec3 c2 = cross(c0, c1);
+                rotA = mat3(c0, c1, c2);
+            }
+
+            // Collision Loop
+            for (uint j = 0; j < pc.total_objects; ++j) {
+                if (i == j) continue;
+
+                InstanceData other = read_buf.data[j];
+                vec3 o_pos = other.model[3].xyz;
+                vec3 delta = o_pos - pos;
+                
+                vec3 o_scale = vec3(length(other.model[0].xyz), length(other.model[1].xyz), length(other.model[2].xyz));
+                vec3 halfB = o_scale * 0.5;
+                float o_type = other.physic.x;
+
+                // I use this to make collisions for sphere accurate
+                float boundA = (type > 0.5) ? scaleA.x : length(halfA);
+                float boundB = (o_type > 0.5) ? o_scale.x : length(halfB);
+
+                // skip if objects to far, reduces from O(n²) to something much smaller
+                if (dot(delta, delta) > pow(boundA + boundB, 2.0)) continue;
+
+                mat3 rotB = mat3(other.model[0].xyz / o_scale.x, other.model[1].xyz / o_scale.y, other.model[2].xyz / o_scale.z);
+                vec3 normal = vec3(0.0);
+                float overlap = 0.0;
+                vec3 world_contact = vec3(0.0);
+
+                // Sphere-Sphere
+                if (type > 0.5 && o_type > 0.5) {
+                    float d = length(delta);
+                    float sum_r = scaleA.x + o_scale.x; 
+                    if (d < sum_r) {
+                        normal = -delta / max(d, 0.0001); 
+                        overlap = sum_r - d;
+                        world_contact = pos - normal * scaleA.x;
+                    }
+                }
+
+                // Box-Box
+                else if (type < 0.5 && o_type < 0.5) {
+                    float min_overlap = 1e9;
+                    vec3 best_axis;
+                    bool separating = false;
+                    vec3 axes[15];
+                    axes[0] = rotA[0]; axes[1] = rotA[1]; axes[2] = rotA[2];
+                    axes[3] = rotB[0]; axes[4] = rotB[1]; axes[5] = rotB[2];
+                    axes[6] = cross(rotA[0], rotB[0]); axes[7] = cross(rotA[0], rotB[1]); axes[8] = cross(rotA[0], rotB[2]);
+                    axes[9] = cross(rotA[1], rotB[0]); axes[10] = cross(rotA[1], rotB[1]); axes[11] = cross(rotA[1], rotB[2]);
+                    axes[12] = cross(rotA[2], rotB[0]); axes[13] = cross(rotA[2], rotB[1]); axes[14] = cross(rotA[2], rotB[2]);
+
+                    for (int a = 0; a < 15; a++) {
+                        vec3 L = axes[a];
+                        float lenSq = dot(L, L);
+                        if (lenSq < 1e-6) continue; 
+                        L *= inversesqrt(lenSq); 
+                        float rA = halfA.x * abs(dot(rotA[0], L)) + halfA.y * abs(dot(rotA[1], L)) + halfA.z * abs(dot(rotA[2], L));
+                        float rB = halfB.x * abs(dot(rotB[0], L)) + halfB.y * abs(dot(rotB[1], L)) + halfB.z * abs(dot(rotB[2], L));
+                        float s = rA + rB - abs(dot(delta, L));
+                        if (s <= 0.0) { separating = true; break; }
+                        if (s < min_overlap) { min_overlap = s; best_axis = L; }
+                    }
+                    if (!separating) {
+                        overlap = min_overlap;
+                        normal = (dot(delta, best_axis) > 0.0) ? -best_axis : best_axis;
+                        vec3 local_dir = transpose(rotA) * (-normal);
+                        world_contact = pos + rotA * vec3((local_dir.x > 0.0) ? halfA.x : -halfA.x, (local_dir.y > 0.0) ? halfA.y : -halfA.y, (local_dir.z > 0.0) ? halfA.z : -halfA.z);
+                    }
+                }
+
+                // Box-Sphere
+                else {
+                    bool i_is_box = (type < 0.5);
+                    vec3 b_pos = i_is_box ? pos : o_pos;
+                    vec3 s_pos = i_is_box ? o_pos : pos;
+                    mat3 b_rot = i_is_box ? rotA : rotB;
+                    vec3 b_half = i_is_box ? halfA : halfB;
+                    float s_rad = i_is_box ? o_scale.x : scaleA.x;
+                    vec3 local_s = transpose(b_rot) * (s_pos - b_pos);
+                    vec3 closest = clamp(local_s, -b_half, b_half);
+                    vec3 local_delta = local_s - closest;
+                    float d = length(local_delta);
+
+                    if (d < s_rad && d > 0.0001) {
+                        overlap = s_rad - d;
+                        normal = b_rot * (local_delta / d);
+                        if (i_is_box) normal = -normal;
+                        world_contact = b_rot * closest + b_pos;
+                    } else if (d <= 0.0001) { // Deep clip fix
+                        overlap = s_rad + 0.1;
+                        normal = vec3(0, 1, 0); 
+                        if (i_is_box) normal = -normal;
+                        world_contact = s_pos;
+                    }
+                }
+
+                if (overlap > 0.0) {
+                    // Positional correction to avoid object collapse
+                    float o_mass = max(other.physic.y, 0.001);
+                    float total_m = mass + o_mass;
+                    float ratio = o_mass / total_m;
+                    pos += normal * overlap * ratio * 0.8;
+
+                    // Impulse Math
+                    vec3 r_me = world_contact - pos;
+                    vec3 r_ot = world_contact - o_pos;
+                    float inertia = (type < 0.5) ? mass * dot(scaleA, scaleA) / 6.0 : 0.4 * mass * scaleA.x * scaleA.x;
+                    float o_inertia = (o_type < 0.5) ? o_mass * dot(o_scale, o_scale) / 6.0 : 0.4 * o_mass * o_scale.x * o_scale.x;
+
+                    vec3 v_rel = (vel + cross(ang_vel, r_me)) - (other.velocity.xyz + cross(other.rotation.xyz, r_ot));
+                    float v_sep = dot(v_rel, normal);
+
+                    if (v_sep < 0.0) {
+                        float K = (1.0/mass + 1.0/o_mass) + dot(normal, cross(cross(r_me, normal)/inertia, r_me)) + dot(normal, cross(cross(r_ot, normal)/o_inertia, r_ot));
+                        float j = -(1.1 * v_sep) / K; // 1.1 = Restitution
+                        vec3 impulse = j * normal;
+
+                        vel += impulse / mass;
+                        ang_vel += cross(r_me, impulse) / inertia;
+
+                        // Friction (Allows sliding/rolling)
+                        v_rel = (vel + cross(ang_vel, r_me)) - (other.velocity.xyz + cross(other.rotation.xyz, r_ot));
+                        vec3 tangent = v_rel - dot(v_rel, normal) * normal;
+                        if (length(tangent) > 0.001) {
+                            vec3 t_dir = normalize(tangent);
+                            float Kt = (1.0/mass + 1.0/o_mass) + dot(t_dir, cross(cross(r_me, t_dir)/inertia, r_me)) + dot(t_dir, cross(cross(r_ot, t_dir)/o_inertia, r_ot));
+                            float jt = -dot(v_rel, t_dir) / Kt;
+                            float mu = 0.4; // Sliding friction
+                            jt = clamp(jt, -j * mu, j * mu);
+                            vec3 f_imp = jt * t_dir;
+                            vel += f_imp / mass;
+                            ang_vel += cross(r_me, f_imp) / inertia;
+                        }
+                    }
+                }
+            }
+
+            // Shader Floor
+            float lowest_y = (type > 0.5) ? scaleA.x : (halfA.x * abs(rotA[0].y) + halfA.y * abs(rotA[1].y) + halfA.z * abs(rotA[2].y));
+            if (pos.y < lowest_y) {
+                pos.y = lowest_y;
+                if (vel.y < 0.0) {
+                    vel.y *= -0.1;
+                    // Apply floor friction/damping here to stop infinite floor sliding
+                    vel.xz *= 0.95; 
+                    ang_vel *= 0.95;
+                    // Tip over if on edge
+                    if (type < 0.5 && length(ang_vel) < 0.5) {
+                        vec3 local_down = transpose(rotA) * vec3(0, -1, 0);
+                        vec3 edge = rotA * vec3((local_down.x > 0.0) ? halfA.x : -halfA.x, (local_down.y > 0.0) ? halfA.y : -halfA.y, (local_down.z > 0.0) ? halfA.z : -halfA.z);
+                        ang_vel += cross(edge, vec3(0, 1, 0)) * 2.0 * dt;
+                    }
+                }
+            }
+
+            // Write back
+            write_buf.data[i].model[0] = vec4(rotA[0] * scaleA.x, 0.0);
+            write_buf.data[i].model[1] = vec4(rotA[1] * scaleA.y, 0.0);
+            write_buf.data[i].model[2] = vec4(rotA[2] * scaleA.z, 0.0);
+            write_buf.data[i].model[3] = vec4(pos, 1.0);
+            write_buf.data[i].velocity = vec4(vel, me.velocity.w);
+            write_buf.data[i].rotation = vec4(ang_vel, 0.0);
+            write_buf.data[i].color = me.color;
+            write_buf.data[i].mat_props = me.mat_props;
+            write_buf.data[i].physic = me.physic;
+        }
+        "
     }
 }
 
@@ -48,163 +549,220 @@ pub mod cs {
         layout(local_size_x = 256) in;
 
         struct InstanceData {
-            mat4 model;     
-            vec4 color;     
-            vec4 mat_props; 
-            vec4 velocity;  
-            vec4 physic;    
-            vec4 rotation;  
+            mat4 model;
+            vec4 color;
+            vec4 mat_props;
+            vec4 velocity;
+            vec4 physic;
+            vec4 rotation;
         };
 
-        layout(std430, set = 0, binding = 0) readonly buffer ReadBuffer { InstanceData data[]; } read_buf;
-        layout(std430, set = 0, binding = 1) writeonly buffer WriteBuffer { InstanceData data[]; } write_buf;
+        layout(std430, set = 0, binding = 0) readonly buffer ReadBuffer {
+            InstanceData data[];
+        } read_buf;
+
+        layout(std430, set = 0, binding = 1) writeonly buffer WriteBuffer {
+            InstanceData data[];
+        } write_buf;
 
         layout(push_constant) uniform PushConstants {
             float dt;
-            uint object_count;
-            uint solid_count;
+            uint total_objects;
+            uint offset;
+            uint count;
         } pc;
 
         mat3 skew(vec3 v) {
             return mat3(
                 0.0,  v.z, -v.y,
-            -v.z,  0.0,  v.x,
+               -v.z,  0.0,  v.x,
                 v.y, -v.x,  0.0
             );
         }
 
         void main() {
-            uint i = gl_GlobalInvocationID.x; // this is id of GPU thread
-            if (i >= pc.object_count) return;
-            write_buf.data[i].model[0] += 0.0;
+            uint i = gl_GlobalInvocationID.x + pc.offset;
+            if (i >= pc.offset + pc.count) return;
+
             InstanceData me = read_buf.data[i];
+            float mass = me.physic.y;
+            if (mass <= 0.0) {
+                write_buf.data[i] = me;
+                return;
+            }
+
             vec3 pos = me.model[3].xyz;
             vec3 vel = me.velocity.xyz;
             vec3 ang_vel = me.rotation.xyz;
-            float radius = me.velocity.w; // collision radius
-            float type = me.physic.x; // 0 - box, 1 - sphere, 2 - universal
-            float mass = max(me.physic.y, 0.01);
-            float gravity_scale = me.physic.z;
-            float dt = pc.dt; // physic step
+            float type = me.physic.x; 
+            float dt = pc.dt;
 
-            vec3 scale = vec3(length(me.model[0].xyz), length(me.model[1].xyz), length(me.model[2].xyz));
-            mat3 rot = mat3(me.model[0].xyz/scale.x, me.model[1].xyz/scale.y, me.model[2].xyz/scale.z); // I do this to get pure rotation, based on every object property. Like that every object will be [-1,1]
+            vec3 scaleA = vec3(length(me.model[0].xyz), length(me.model[1].xyz), length(me.model[2].xyz));
+            vec3 halfA = scaleA * 0.5; 
+            mat3 rotA = mat3(me.model[0].xyz / scaleA.x, me.model[1].xyz / scaleA.y, me.model[2].xyz / scaleA.z);
 
-            vel.y -= 9.81 * dt * gravity_scale;
-            pos += vel * dt; // linear step, so it will be based on time, not fps
-            
+            vel.y -= 9.81 * me.physic.z * dt;
+            pos += vel * dt;
+
             if (length(ang_vel) > 0.001) {
-                rot += (skew(ang_vel) * rot) * dt;
-                vec3 c0 = normalize(rot[0]);
-                vec3 c1 = normalize(rot[1] - dot(c0, rot[1]) * c0);
+                rotA += skew(ang_vel) * rotA * dt;
+                vec3 c0 = normalize(rotA[0]);
+                vec3 c1 = normalize(rotA[1] - dot(c0, rotA[1]) * c0);
                 vec3 c2 = cross(c0, c1);
-                rot = mat3(c0, c1, c2);
+                rotA = mat3(c0, c1, c2);
             }
 
-            for (uint j = 0; j < pc.object_count; ++j) {
+            // ang_vel *= 0.98; 
+            
+            for (uint j = 0; j < pc.total_objects; ++j) {
                 if (i == j) continue;
-                InstanceData other = read_buf.data[j];
-                if (length(other.model[0].xyz) > 100.0) continue; 
 
+                InstanceData other = read_buf.data[j];
                 vec3 o_pos = other.model[3].xyz;
-                float o_radius = other.velocity.w;
+                vec3 delta = o_pos - pos;
+                
+                vec3 o_scale = vec3(length(other.model[0].xyz), length(other.model[1].xyz), length(other.model[2].xyz));
+                vec3 halfB = o_scale * 0.5;
+                
                 float o_type = other.physic.x;
+
+                float boundA = (type > 0.5) ? scaleA.x : length(halfA);
+                float boundB = (o_type > 0.5) ? o_scale.x : length(halfB);
+                
+                float max_dist = boundA + boundB;
+                if (dot(delta, delta) > max_dist * max_dist) continue;
+
+
+                mat3 rotB = mat3(other.model[0].xyz / o_scale.x, other.model[1].xyz / o_scale.y, other.model[2].xyz / o_scale.z);
 
                 vec3 normal = vec3(0.0);
                 float overlap = 0.0;
-                vec3 world_contact = vec3(0.0);
 
-                if (type > 0.5 && o_type > 0.5) { 
-                    vec3 delta = pos - o_pos;
+                // SPHERE-SPHERE
+                if (type > 0.5 && o_type > 0.5) {
                     float d = length(delta);
-                    if (d < radius + o_radius) {
-                        normal = delta / max(d, 0.001);
-                        overlap = (radius + o_radius) - d;
-                        world_contact = o_pos + normal * o_radius;
+                    // spheres use full scale.x as their radius
+                    float sum_r = scaleA.x + o_scale.x; 
+                    if (d < sum_r && d > 0.0001) {
+                        normal = -delta / d; 
+                        overlap = sum_r - d;
+                    } else if (d <= 0.0001) {
+                        normal = vec3(0, 1, 0);
+                        overlap = sum_r;
                     }
-                } 
-                else {
-                    bool me_is_box = (type < 0.5);
-                    mat3 box_rot = me_is_box ? rot : mat3(other.model[0].xyz/length(other.model[0].xyz), other.model[1].xyz/length(other.model[1].xyz), other.model[2].xyz/length(other.model[2].xyz));
-                    vec3 box_pos = me_is_box ? pos : o_pos;
-                    vec3 sph_pos = me_is_box ? o_pos : pos;
-                    float b_rad = me_is_box ? radius : o_radius;
-                    float s_rad = me_is_box ? o_radius : radius;
+                }
+                // BOX-BOX
+                else if (type < 0.5 && o_type < 0.5) {
+                    float min_overlap = 1e9;
+                    vec3 best_axis;
+                    bool separating = false;
 
-                    vec3 local_sph = transpose(box_rot) * (sph_pos - box_pos);
-                    vec3 local_closest = clamp(local_sph, -vec3(b_rad), vec3(b_rad));
-                    vec3 local_delta = local_sph - local_closest;
+                    vec3 axes[15];
+                    axes[0] = rotA[0]; axes[1] = rotA[1]; axes[2] = rotA[2];
+                    axes[3] = rotB[0]; axes[4] = rotB[1]; axes[5] = rotB[2];
+                    axes[6] = cross(rotA[0], rotB[0]); axes[7] = cross(rotA[0], rotB[1]); axes[8] = cross(rotA[0], rotB[2]);
+                    axes[9] = cross(rotA[1], rotB[0]); axes[10] = cross(rotA[1], rotB[1]); axes[11] = cross(rotA[1], rotB[2]);
+                    axes[12] = cross(rotA[2], rotB[0]); axes[13] = cross(rotA[2], rotB[1]); axes[14] = cross(rotA[2], rotB[2]);
+
+                    for (int a = 0; a < 15; a++) {
+                        vec3 L = axes[a];
+                        float lenSq = dot(L, L);
+                        if (lenSq < 1e-6) continue; 
+                        L *= inversesqrt(lenSq); 
+
+                        float dist = abs(dot(delta, L));
+                        float rA = halfA.x * abs(dot(rotA[0], L)) + halfA.y * abs(dot(rotA[1], L)) + halfA.z * abs(dot(rotA[2], L));
+                        float rB = halfB.x * abs(dot(rotB[0], L)) + halfB.y * abs(dot(rotB[1], L)) + halfB.z * abs(dot(rotB[2], L));
+                        float s = rA + rB - dist;
+
+                        if (s <= 0.0) { separating = true; break; }
+                        if (s < min_overlap) { min_overlap = s; best_axis = L; }
+                    }
+
+                    if (!separating) {
+                        overlap = min_overlap;
+                        normal = (dot(delta, best_axis) > 0.0) ? -best_axis : best_axis;
+                    }
+                }
+                // BOX-SPHERE
+                else {
+                    bool i_is_box = (type < 0.5);
+                    vec3 b_pos = i_is_box ? pos : o_pos;
+                    vec3 s_pos = i_is_box ? o_pos : pos;
+                    mat3 b_rot = i_is_box ? rotA : rotB;
+                    vec3 b_half = i_is_box ? halfA : halfB;
+                    
+                    float s_rad = i_is_box ? o_scale.x : scaleA.x;
+
+                    vec3 local_s = transpose(b_rot) * (s_pos - b_pos);
+                    vec3 closest = clamp(local_s, -b_half, b_half);
+                    vec3 local_delta = local_s - closest;
                     float d = length(local_delta);
 
-                    if (d < s_rad) {
+                    if (d < s_rad && d > 0.0001) {
                         overlap = s_rad - d;
-                        vec3 local_n = (d > 0.001) ? local_delta / d : vec3(0,1,0);
-                        normal = box_rot * local_n; 
-                        if (me_is_box) normal = -normal; 
-                        world_contact = box_rot * local_closest + box_pos;
+                        normal = b_rot * (local_delta / d);
+                        if (i_is_box) normal = -normal;
+                    } else if (d <= 0.0001) { 
+                        overlap = s_rad;
+                        normal = vec3(0, 1, 0);
+                        if (i_is_box) normal = -normal;
                     }
                 }
 
+                // Impulse Math
                 if (overlap > 0.0) {
-                    float o_mass = max(other.physic.y, 0.1);
-                    pos += normal * overlap * (o_mass / (mass + o_mass)) * 0.5;
+                    float my_mass = mass;
+                    float their_mass = other.physic.y;
 
-                    vec3 r_me = world_contact - pos;
-                    vec3 r_ot = world_contact - o_pos;
-
-                    vec3 v_rel = (vel + cross(ang_vel, r_me)) - (other.velocity.xyz + cross(other.rotation.xyz, r_ot));
-                    float v_sep = dot(v_rel, normal);
-
-                    if (v_sep < 0.0) {
-                        float i_coeff = (type < 0.5) ? 0.66 : 0.4;
-                        float o_coeff = (o_type < 0.5) ? 0.66 : 0.4;
-                        float inertia = i_coeff * mass * radius * radius;
-                        float o_inertia = o_coeff * o_mass * o_radius * o_radius;
-                        
-                        float K = (1.0/mass + 1.0/o_mass) + 
-                                dot(normal, cross(cross(r_me, normal) / inertia, r_me)) +
-                                dot(normal, cross(cross(r_ot, normal) / o_inertia, r_ot));
-
-                        float j_mag = -(1.2 * v_sep) / K; 
-                        vec3 impulse = j_mag * normal;
-
-                        vel += impulse / mass;
-                        ang_vel += cross(r_me, impulse) / inertia;
-
-                        v_rel = (vel + cross(ang_vel, r_me)) - (other.velocity.xyz + cross(other.rotation.xyz, r_ot));
-                        vec3 tangent = v_rel - dot(v_rel, normal) * normal;
-                        if (length(tangent) > 0.01) {
-                            vec3 t_dir = normalize(tangent);
-                            float Kt = (1.0/mass + 1.0/o_mass) + 
-                                    dot(t_dir, cross(cross(r_me, t_dir) / inertia, r_me)) +
-                                    dot(t_dir, cross(cross(r_ot, t_dir) / o_inertia, r_ot));
-                            
-                            float friction_mu = 0.8; 
-                            float jt_mag = -dot(v_rel, t_dir) / Kt;
-                            jt_mag = clamp(jt_mag, -j_mag * friction_mu, j_mag * friction_mu);
-
-                            vec3 f_imp = jt_mag * t_dir;
-                            vel += f_imp / mass;
-                            ang_vel += cross(r_me, f_imp) / inertia;
+                    if (my_mass > 0.0 && their_mass > 0.0) {
+                        if (pos.y < o_pos.y - 0.2) {
+                            my_mass *= 5.0;     
+                        } else if (pos.y > o_pos.y + 0.2) {
+                            their_mass *= 5.0;  
                         }
                     }
+
+                    float total_mass = (their_mass <= 0.0) ? my_mass : my_mass + their_mass;
+                    float ratio = (their_mass <= 0.0) ? 1.0 : their_mass / total_mass;
+
+                    // Increased clamp limit so giant spheres can properly shove cubes out of the way
+                    overlap = min(overlap, 3.0); 
+
+                    pos += normal * overlap * ratio * 0.9;
+
+                    vec3 o_vel = other.velocity.xyz;
+                    vec3 relative_vel = vel - o_vel;
+                    float v_rel = dot(relative_vel, normal);
+                    
+                    if (v_rel < 0.0) {
+                        float bounce = (abs(v_rel) < 1.0) ? 0.0 : 0.2;
+                        
+                        // Properly transfer momentum based on the mass ratio
+                        vel -= normal * v_rel * (1.0 + bounce) * ratio; 
+                        
+                        vec3 tangent = relative_vel - normal * v_rel;
+                        vel -= tangent * 0.5 * ratio;
+                        ang_vel *= 0.9; 
+                    }
                 }
             }
 
-            if (pos.y < radius) {
-                pos.y = radius;
+            if (pos.y < halfA.y) {
+                pos.y = halfA.y;
                 if (vel.y < 0.0) {
-                    vel.y *= -0.2;
-                    ang_vel *= 0.8;
-                    vel.xz *= 0.9;
+                    vel.y *= -0.1;
+                    vec3 tangent = vel - vec3(0, vel.y, 0);
+                    vel -= tangent * 0.5;
+                    ang_vel *= 0.5;
                 }
             }
 
-            write_buf.data[i].model[0] = vec4(rot[0] * scale.x, 0.0);
-            write_buf.data[i].model[1] = vec4(rot[1] * scale.y, 0.0);
-            write_buf.data[i].model[2] = vec4(rot[2] * scale.z, 0.0);
+            write_buf.data[i].model[0] = vec4(rotA[0] * scaleA.x, 0.0);
+            write_buf.data[i].model[1] = vec4(rotA[1] * scaleA.y, 0.0);
+            write_buf.data[i].model[2] = vec4(rotA[2] * scaleA.z, 0.0);
             write_buf.data[i].model[3] = vec4(pos, 1.0);
-            write_buf.data[i].velocity = vec4(vel, radius);
+            write_buf.data[i].velocity = vec4(vel, me.velocity.w);
             write_buf.data[i].rotation = vec4(ang_vel, 0.0);
             write_buf.data[i].color = me.color;
             write_buf.data[i].mat_props = me.mat_props;
@@ -363,3 +921,229 @@ pub mod fs {
         "
     }
 }
+
+pub mod fs_unlit {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        src: "
+        #version 450
+
+        layout(location = 0) in vec3 v_color;
+        layout(location = 1) in vec3 v_normal;
+        layout(location = 2) in vec3 v_pos;
+        layout(location = 3) in vec4 v_mat_data;
+        layout(location = 4) in vec2 v_uv;
+        layout(location = 5) in float v_emissive;
+        layout(location = 6) in vec2 v_screen_uv;
+
+        layout(set = 0, binding = 0) uniform UniformBufferObject {
+            mat4 view;
+            mat4 proj;
+            vec3 eye_pos;
+            float pad1;
+            vec3 light_pos;
+            float pad2;
+            vec3 light_color;
+            float light_intensity;
+        } ubo;
+
+        layout(set = 0, binding = 1) uniform sampler2D tex_sampler;
+
+        layout(location = 0) out vec4 f_color;
+
+        void main() {
+            // Dummy usage to keep UBO layout matching the PBR pipeline
+            float dummy = (ubo.light_intensity + ubo.light_pos.x + ubo.light_color.x + ubo.view[0][0]) * 0.0000001;
+
+            vec4 tex_raw = texture(tex_sampler, v_uv);
+            vec3 base_color = v_color * tex_raw.rgb;
+            f_color = vec4(base_color + vec3(dummy), tex_raw.a);
+        }
+        "
+    }
+}
+
+pub mod fs_emissive {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        src: "
+        #version 450
+
+        layout(location = 0) in vec3 v_color;
+        layout(location = 1) in vec3 v_normal;
+        layout(location = 2) in vec3 v_pos;
+        layout(location = 3) in vec4 v_mat_data;
+        layout(location = 4) in vec2 v_uv;
+        layout(location = 5) in float v_emissive;
+        layout(location = 6) in vec2 v_screen_uv;
+
+        layout(set = 0, binding = 0) uniform UniformBufferObject {
+            mat4 view;
+            mat4 proj;
+            vec3 eye_pos;
+            float pad1;
+            vec3 light_pos;
+            float pad2;
+            vec3 light_color;
+            float light_intensity;
+        } ubo;
+
+        layout(set = 0, binding = 1) uniform sampler2D tex_sampler;
+
+        layout(location = 0) out vec4 f_color;
+
+        void main() {
+            // Dummy usage to keep UBO layout matching the PBR pipeline
+            float dummy = (ubo.light_intensity + ubo.light_pos.x + ubo.light_color.x + ubo.view[0][0]) * 0.0000001;
+
+            vec4 tex_raw = texture(tex_sampler, v_uv);
+            vec3 base_color = v_color * tex_raw.rgb;
+
+            // Emissive glow with tone mapping
+            vec3 result = base_color * 1.5;
+            result = vec3(1.0) - exp(-result * 1.2);
+
+            // Vignette
+            vec2 center_dist = v_screen_uv - 0.5;
+            float vignette = 1.0 - dot(center_dist, center_dist) * 1.2;
+            result *= clamp(vignette, 0.0, 1.0);
+
+            f_color = vec4(result + vec3(dummy), tex_raw.a);
+        }
+        "
+    }
+}
+
+pub mod fs_normal_debug {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        src: "
+        #version 450
+
+        layout(location = 0) in vec3 v_color;
+        layout(location = 1) in vec3 v_normal;
+        layout(location = 2) in vec3 v_pos;
+        layout(location = 3) in vec4 v_mat_data;
+        layout(location = 4) in vec2 v_uv;
+        layout(location = 5) in float v_emissive;
+        layout(location = 6) in vec2 v_screen_uv;
+
+        layout(set = 0, binding = 0) uniform UniformBufferObject {
+            mat4 view;
+            mat4 proj;
+            vec3 eye_pos;
+            float pad1;
+            vec3 light_pos;
+            float pad2;
+            vec3 light_color;
+            float light_intensity;
+        } ubo;
+
+        layout(set = 0, binding = 1) uniform sampler2D tex_sampler;
+
+        layout(location = 0) out vec4 f_color;
+
+        void main() {
+            // Dummy usage to keep UBO layout matching the PBR pipeline
+            float dummy = (ubo.light_intensity + ubo.light_pos.x + ubo.light_color.x + ubo.view[0][0]) * 0.0000001;
+
+            vec3 N = normalize(v_normal);
+            // Map normal from [-1,1] to [0,1] for visualization
+            vec3 result = N * 0.5 + 0.5;
+            f_color = vec4(result + vec3(dummy), 1.0);
+        }
+        "
+    }
+}
+
+pub mod cs2 {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        src: "
+        #version 450
+        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+        struct InstanceData {
+            mat4 model;
+            vec4 color;
+            vec4 mat_props;
+            vec4 velocity;
+            vec4 physic; 
+            vec4 rotation;
+        };
+
+        layout(set = 0, binding = 0) buffer ReadBuf {
+            InstanceData data[];
+        } read_buf;
+
+        layout(set = 0, binding = 1) buffer WriteBuf {
+            InstanceData data[];
+        } write_buf;
+
+        layout(push_constant) uniform PushConstants {
+            float dt;
+            uint total_objects;
+            uint offset;
+            uint count;
+        } pc;
+
+        mat3 skew(vec3 v) {
+            return mat3(0.0, -v.z, v.y, v.z, 0.0, -v.x, -v.y, v.x, 0.0);
+        }
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x + pc.offset;
+            if (i >= pc.offset + pc.count) return;
+            
+            write_buf.data[i] = read_buf.data[i];
+            
+            InstanceData me = read_buf.data[i];
+            vec3 pos = me.model[3].xyz;
+            vec3 vel = me.velocity.xyz;
+            vec3 ang_vel = me.rotation.xyz;
+            
+            float radius = me.velocity.w;
+            float type = me.physic.x;
+            float mass = me.physic.y;
+            float bounce = me.physic.z;
+            float grav = me.physic.w;
+
+            if (mass <= 0.0) return;
+
+            vel += vec3(0.0, -9.81 * grav * pc.dt, 0.0);
+
+            // Floor collision
+            float ground_level = 0.5 + radius;
+            if (pos.y < ground_level) {
+                pos.y = ground_level;
+                vel.y = -vel.y * bounce;
+                vel.x *= 0.98;
+                vel.z *= 0.98;
+                ang_vel *= 0.95;
+            }
+
+            pos += vel * pc.dt;
+
+            mat3 rot = mat3(me.model[0].xyz, me.model[1].xyz, me.model[2].xyz);
+            if (length(ang_vel) > 0.001) {
+                rot += skew(ang_vel) * rot * pc.dt;
+                vec3 c0 = normalize(rot[0]);
+                vec3 c1 = normalize(rot[1] - dot(c0, rot[1]) * c0);
+                vec3 c2 = cross(c0, c1);
+                rot = mat3(c0, c1, c2);
+            }
+
+            me.model[0].xyz = rot[0];
+            me.model[1].xyz = rot[1];
+            me.model[2].xyz = rot[2];
+            me.model[3].xyz = pos;
+
+            me.velocity.xyz = vel;
+            me.rotation.xyz = ang_vel;
+
+            write_buf.data[i] = me;
+        }
+        ",
+    }
+}
+

@@ -10,4 +10,4 @@ rand = "0.8"
 
 [[bin]]
 name = "compare"
-path = "main.rs"
+path = "cubes_comp.rs"
