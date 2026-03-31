@@ -1,9 +1,12 @@
+use crate::core::ComputeShaderType;
+
 #[derive(Clone, Debug)]
 pub struct Physics {
     pub velocity: [f32; 4],
     pub mass: f32,
     pub collision: f32,
     pub gravity: f32,
+    pub compute_shader: ComputeShaderType,
 }
 
 impl Default for Physics {
@@ -13,6 +16,7 @@ impl Default for Physics {
             mass: 1.0,
             collision: 0.0,
             gravity: 1.0,
+            compute_shader: ComputeShaderType::FullPhysics,
         }
     }
 }
@@ -35,6 +39,11 @@ impl Physics {
 
     pub fn gravity(mut self, g: f32) -> Self {
         self.gravity = g;
+        self
+    }
+
+    pub fn compute_shader(mut self, c: ComputeShaderType) -> Self {
+        self.compute_shader = c;
         self
     }
 }

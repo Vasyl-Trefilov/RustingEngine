@@ -1,6 +1,8 @@
 pub mod camera;
+pub mod compute_registry;
 pub mod pipeline;
 pub mod render;
+pub mod shader_registry;
 pub mod swapchain;
 
 use std::sync::Arc;

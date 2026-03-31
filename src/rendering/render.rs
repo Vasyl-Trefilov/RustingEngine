@@ -2,7 +2,7 @@ use crate::scene::object::PhysicsPushConstants;
 use std::sync::Arc;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo,
+    AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderPassBeginInfo,
     SubpassContents,
 };
 use vulkano::descriptor_set::PersistentDescriptorSet;
@@ -39,8 +39,9 @@ pub fn process_render(
                 0,
                 PhysicsPushConstants {
                     dt,
-                    object_count: total_objects,
-                    solid_count: solid_object_count,
+                    total_objects,
+                    offset: 0,
+                    count: total_objects,
                 },
             )
             .dispatch([workgroups_x, 1, 1])

@@ -1,52 +1,22 @@
-// ! This is test file, here I test how user friendly is my library
+//! This is a test file, where I test the user-friendliness of my library
+mod examples;
+use crate::examples::physics::main as physics_main;
+use crate::examples::shaders::main as shaders_main;
+use crate::examples::stress_pbr::main as pbr_main;
+use crate::examples::stress_unlit::main as unlit_main;
+use crate::examples::rotate::main as rotate_main;
 
-use rusting_engine::{Engine, Material, Physics};
 
 fn main() {
-    let mut engine = Engine::new("RustingEngine - Simple API Demo");
-    engine.set_light([30.0, 30.0, 30.0], [1.0, 0.95, 0.9], 450.0);
+    // Comment out the function you don't want to run, and uncomment the one you do!
+    
+    // shaders_main();
+    // physics_main();
 
-    let red = Material::standard().color([1.0, 0.0, 0.0]).build();
-    let green = Material::standard().color([0.0, 1.0, 0.0]).build();
-
-    for i in 0..10 {
-        for j in 0..3 {
-            for k in 0..10 {
-                let pos = [i as f32 * 1.5, j as f32 * 2.0 + 7.0, k as f32 * 1.5];
-                engine.add_cube(
-                    pos,
-                    &red,
-                    &Physics::default()
-                        .velocity([0.0, 0.0, 0.0, 0.5])
-                        .mass(1.0)
-                        .collision(1.0)
-                        .gravity(0.0),
-                );
-            }
-        }
-    }
-
-    // engine.add_sphere(
-    // [7.0,15.0,7.0],
-    //     5.0,
-    //     &green,
-    //     &Physics::default()
-    //             .velocity([0.0, 0.0, 0.0, 5.0])
-    //             .mass(100.0)
-    //             .collision(1.0)
-    //             .gravity(1.0),
-    //     );
-
-    engine.add_sphere(
-        [7.0, 100.0, 7.0],
-        7.5,
-        &green,
-        &Physics::default()
-            .velocity([0.0, 0.0, 0.0, 7.5])
-            .mass(100000.0)
-            .collision(1.0)
-            .gravity(1.0),
-    );
-
-    engine.run();
+    // 10,000 cubes stress testing
+    // unlit_main(); // Run the performance-heavy version via PBR or Unlit
+    pbr_main();
+    
+    // rotate test
+    // rotate_main();
 }

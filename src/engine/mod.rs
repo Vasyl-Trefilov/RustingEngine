@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use winit::event::{Event, MouseButton, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
+use winit::platform::run_return::EventLoopExtRunReturn;
 use winit::window::CursorGrabMode;
 
 use vulkano::sync::GpuFuture;
@@ -10,15 +11,15 @@ use vulkano::sync::GpuFuture;
 use crate::core::{Material, Physics, Transform};
 use crate::geometry::shapes::{create_cube, create_sphere_subdivided};
 use crate::rendering::camera::create_projection_matrix;
+use crate::rendering::compute_registry::{ComputeShaderRegistry, ComputeShaderType};
 use crate::rendering::init_vulkan;
 use crate::rendering::pipeline::create_pipeline;
 use crate::rendering::render::create_builder;
+use crate::rendering::shader_registry::{ShaderRegistry, ShaderType};
 use crate::rendering::swapchain::{create_framebuffers, create_render_pass};
 use crate::rendering::VulkanBase;
 use crate::scene::object::Instance;
-use crate::scene::RenderScene;
-use crate::scene::{begin_render_pass_only, record_compute_physics};
-use crate::shaders::{cs, fs, vs};
+use crate::scene::{begin_render_pass_only, record_compute_physics_multi, ComputeDispatchInfo, RenderScene};
 
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
@@ -110,6 +111,10 @@ impl PerspectiveCamera {
     }
 }
 
+/// High-level engine structure for building and rendering scenes.
+///
+/// Handles Vulkan context, swapchain, render pass, rendering pipeline, inputs, 
+/// and the physics simulation loop.
 pub struct Engine {
     pub camera: Arc<Mutex<PerspectiveCamera>>,
     scene: Arc<Mutex<RenderScene>>,
@@ -118,21 +123,29 @@ pub struct Engine {
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<vulkano::image::SwapchainImage>>,
     render_pass: Arc<vulkano::render_pass::RenderPass>,
-    pipeline: Arc<vulkano::pipeline::GraphicsPipeline>,
-    compute_pipeline: Arc<ComputePipeline>,
+    registry: ShaderRegistry,
+    compute_registry: ComputeShaderRegistry,
     memory_allocator: Arc<vulkano::memory::allocator::StandardMemoryAllocator>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    cached_cube_mesh: Option<crate::geometry::Mesh>,
+    cached_sphere_mesh: Option<crate::geometry::Mesh>,
 }
 
 impl Engine {
+    /// Creates a new Engine and initializes Vulkan, Winit, and rendering pipelines.
+    ///
+    /// # Arguments
+    /// * `title` - The window title.
+    ///
+    /// # Examples
+    /// ```
+    /// let engine = rusting_engine::Engine::new("My Game");
+    /// ```
     pub fn new(title: &str) -> Self {
         let event_loop = EventLoop::new();
         let base = init_vulkan(&event_loop, title);
         let dims = base.window.inner_size();
-
-        let vs = vs::load(base.device.clone()).unwrap();
-        let fs = fs::load(base.device.clone()).unwrap();
 
         let (swapchain, images) = Swapchain::new(
             base.device.clone(),
@@ -150,7 +163,7 @@ impl Engine {
         .unwrap();
 
         let render_pass = create_render_pass(base.device.clone(), &swapchain);
-        let pipeline = create_pipeline(vs, fs, &render_pass, &base.device);
+        let registry = ShaderRegistry::new(&base.device, &render_pass);
 
         let cb_allocator = Arc::new(StandardCommandBufferAllocator::new(
             base.device.clone(),
@@ -164,21 +177,13 @@ impl Engine {
         let scene = RenderScene::new(
             &mem_allocator,
             &ds_allocator,
-            &pipeline,
+            registry.default_pipeline(),
             &base.queue,
             3,
-            1_000_000,
+            1_000_00, // 1m
         );
 
-        let compute_shader = cs::load(base.device.clone()).unwrap();
-        let cp = ComputePipeline::new(
-            base.device.clone(),
-            compute_shader.entry_point("main").unwrap(),
-            &(),
-            None,
-            |_| {},
-        )
-        .unwrap();
+        let compute_registry = ComputeShaderRegistry::new(&base.device);
 
         Self {
             event_loop: Some(event_loop),
@@ -186,8 +191,8 @@ impl Engine {
             swapchain,
             images,
             render_pass,
-            pipeline,
-            compute_pipeline: cp,
+            registry,
+            compute_registry,
             memory_allocator: mem_allocator,
             descriptor_set_allocator: ds_allocator,
             command_buffer_allocator: cb_allocator,
@@ -198,67 +203,143 @@ impl Engine {
                 0.1,
                 1000.0,
             ))),
+            cached_cube_mesh: None,
+            cached_sphere_mesh: None,
         }
     }
 
+    /// Set the sun in scene
     pub fn set_light(&mut self, pos: [f32; 3], color: [f32; 3], intensity: f32) {
         self.scene.lock().unwrap().set_light(pos, color, intensity);
     }
 
-    pub fn add_cube(&mut self, pos: [f32; 3], mat: &Material, phys: &Physics) {
-        let mesh = crate::geometry::shapes::create_cube(&self.memory_allocator);
+    /// Adding a cube to the scene.
+    /// 
+    /// # Example
+    /// ```
+    /// engine.add_cube(
+    ///    Transform {
+    ///        ..Default::default()
+    ///    },
+    ///    &Material::standard()
+    ///        .build(),
+    ///    &Physics::default()
+    ///        .collision(0.2), // type, if collision < 0.5 => Box, collision > 0.5 => Sphere
+    ///    );
+    /// ```
+    pub fn add_cube(&mut self, transform: Transform, mat: &Material, phys: &Physics) {
+        // Cache mesh on first use, then reuse
+        let mesh = if let Some(cached) = &self.cached_cube_mesh {
+            cached.clone()
+        } else {
+            let m = crate::geometry::shapes::create_cube(&self.memory_allocator);
+            self.cached_cube_mesh = Some(m.clone());
+            m
+        };
+        
         let inst = Instance {
-            model_matrix: Transform {
-                position: pos,
-                ..Default::default()
-            }
-            .to_matrix(),
+            model_matrix: transform.to_matrix(),
             color: mat.color,
             velocity: phys.velocity,
             mass: phys.mass,
             collision: phys.collision,
             gravity: phys.gravity,
+            shader: mat.shader,
+            compute_shader: phys.compute_shader,
             ..Default::default()
         };
         self.scene.lock().unwrap().add_instance(mesh, inst);
     }
 
-    pub fn add_sphere(&mut self, pos: [f32; 3], scale: f32, mat: &Material, phys: &Physics) {
-        let mesh = crate::geometry::shapes::create_sphere_subdivided(&self.memory_allocator, 3);
+    /// Adding a sphere to the scene.
+    /// 
+    /// # Example
+    /// ```
+    /// engine.add_sphere(
+    ///    Transform {
+    ///        ..Default::default()
+    ///    },
+    ///    &Material::standard()
+    ///        .build(),
+    ///    &Physics::default()
+    ///        .collision(0.8), // type, if collision < 0.5 => Box, collision > 0.5 => Sphere
+    ///    );
+    /// ```
+    pub fn add_sphere(&mut self, transform: Transform, mat: &Material, phys: &Physics) {
+        // Cache mesh on first use, then reuse
+        let mesh = if let Some(cached) = &self.cached_sphere_mesh {
+            cached.clone()
+        } else {
+            let m = crate::geometry::shapes::create_sphere_subdivided(&self.memory_allocator, 3);
+            self.cached_sphere_mesh = Some(m.clone());
+            m
+        };
+        
         let inst = Instance {
-            model_matrix: Transform {
-                position: pos,
-                scale: [scale, scale, scale],
-                ..Default::default()
-            }
-            .to_matrix(),
+            model_matrix: transform.to_matrix(),
             color: mat.color,
             velocity: phys.velocity,
             mass: phys.mass,
             collision: phys.collision,
             gravity: phys.gravity,
+            shader: mat.shader,
+            compute_shader: phys.compute_shader,
             ..Default::default()
         };
         self.scene.lock().unwrap().add_instance(mesh, inst);
     }
 
+    /// Set a scene-wide shader override. All objects will use this shader.
+    pub fn set_scene_shader(&mut self, shader: ShaderType) {
+        self.registry.set_scene_shader(shader);
+    }
+
+    /// Clear the scene-wide shader override. Objects will use their per-object shader.
+    pub fn clear_scene_shader(&mut self) {
+        self.registry.clear_scene_shader();
+    }
+
+    /// Set a scene-wide shader override. All objects will use this shader.
+    pub fn set_scene_physic(&mut self, shader: ComputeShaderType) {
+        self.compute_registry.set_scene_shader(shader);
+    }
+
+    /// Clear the scene-wide shader override. Objects will use their per-object shader.
+    pub fn clear_scene_physic(&mut self) {
+        self.compute_registry.clear_scene_shader();
+    }
+
+    /// Starts the engine's main loop.
+    ///
+    /// This method will block the current thread until the window is closed.
+    /// It handles event dispatch, physics update intervals, and issues continuous draw calls.
     pub fn run(mut self) {
         let mut previous_frame_end: Option<Box<dyn GpuFuture>> =
             Some(sync::now(self.base.device.clone()).boxed());
+        let effective_compute_type = self.compute_registry.scene_shader();
+        let current_phys_type = self.compute_registry.scene_shader();
 
-        let (physics_read, physics_write, mut solid_obj_count) = {
+        let (physics_read, physics_write, mut solid_obj_count, dispatches) = {
             let mut s = self.scene.lock().unwrap();
-            s.upload_to_gpu(&self.memory_allocator, &self.base.queue);
+            let d = s.upload_to_gpu(&self.memory_allocator, &self.base.queue, &self.compute_registry);
             let tex_count = s.texture_views.len();
-            s.ensure_descriptor_cache(&self.pipeline, tex_count);
+            s.ensure_descriptor_cache(self.registry.default_pipeline(), tex_count);
             (
                 s.physics_read.clone(),
                 s.physics_write.clone(),
                 s.total_instances,
+                d,
             )
         };
 
-        let compute_layout = self.compute_pipeline.layout().set_layouts()[0].clone();
+
+
+    // Use that shader's layout for the descriptor sets
+    let compute_layout = self.compute_registry
+        .get_pipeline(effective_compute_type)
+        .layout()
+        .set_layouts()[0]
+        .clone();
         let set_0 = PersistentDescriptorSet::new(
             &self.descriptor_set_allocator,
             compute_layout.clone(),
@@ -288,12 +369,12 @@ impl Engine {
         let mut recreate_swapchain = false;
         let mut frame_index = 0;
 
-        let start_time = Instant::now();
-        let mut fps_timer = Instant::now();
-        let mut frame_count = 0u32;
+        // let start_time = Instant::now();
+        // let mut fps_timer = Instant::now();
+        // let mut frame_count = 0u32;
 
-        let event_loop = self.event_loop.take().unwrap();
-        event_loop.run(move |event, _, control_flow| {
+        let mut event_loop = self.event_loop.take().unwrap();
+        event_loop.run_return(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
             match event {
                 Event::WindowEvent {
@@ -343,15 +424,15 @@ impl Engine {
                 Event::MainEventsCleared => {
                     frame_index = (frame_index + 1) % 3;
 
-                    frame_count += 1;
-                    if fps_timer.elapsed().as_secs_f32() >= 2.0 {
-                        println!(
-                            "FPS: {:.0}",
-                            frame_count as f32 / fps_timer.elapsed().as_secs_f32()
-                        );
-                        frame_count = 0;
-                        fps_timer = Instant::now();
-                    }
+                    // frame_count += 1;
+                    // if fps_timer.elapsed().as_secs_f32() >= 2.0 {
+                    //     println!(
+                    //         "FPS: {:.0}",
+                    //         frame_count as f32 / fps_timer.elapsed().as_secs_f32()
+                    //     );
+                    //     frame_count = 0;
+                    //     fps_timer = Instant::now();
+                    // }
 
                     let now = Instant::now();
                     let mut delta_time = now.duration_since(last_frame_instant).as_secs_f32();
@@ -416,7 +497,7 @@ impl Engine {
                         s.prepare_frame_ubo(frame_index, view, proj, cam_pos);
                         solid_obj_count = s.total_instances;
                         let tex_count = s.texture_views.len();
-                        s.ensure_descriptor_cache(&self.pipeline, tex_count);
+                        s.ensure_descriptor_cache(self.registry.default_pipeline(), tex_count);
                         if compute_ping_pong {
                             0
                         } else {
@@ -429,11 +510,11 @@ impl Engine {
                     let mut physics_ran = false;
                     while accumulator >= fixed_dt {
                         let active_set = if compute_ping_pong { &set_1 } else { &set_0 };
-                        record_compute_physics(
+                        record_compute_physics_multi(
                             &mut comp_builder,
-                            &self.compute_pipeline,
+                            &self.compute_registry,
                             active_set,
-                            solid_obj_count,
+                            &dispatches,
                             fixed_dt,
                             solid_obj_count,
                         );
@@ -462,11 +543,11 @@ impl Engine {
                             &framebuffers,
                             img_index,
                             self.base.window.inner_size().into(),
-                            &self.pipeline,
+                            self.registry.default_pipeline(),
                         );
-                        s.record_draws(
+                        s.record_draws_multi(
                             &mut render_builder,
-                            &self.pipeline,
+                            &self.registry,
                             frame_index,
                             physics_idx,
                         );

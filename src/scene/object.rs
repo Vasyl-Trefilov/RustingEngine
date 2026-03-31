@@ -1,4 +1,6 @@
 use crate::geometry::Mesh;
+use crate::rendering::compute_registry::ComputeShaderType;
+use crate::rendering::shader_registry::ShaderType;
 use crate::scene::animation::AnimationType;
 use nalgebra::{Matrix4, Rotation3, Vector3};
 use std::sync::Arc;
@@ -20,8 +22,9 @@ pub struct InstanceData {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PhysicsPushConstants {
     pub dt: f32,
-    pub object_count: u32,
-    pub solid_count: u32,
+    pub total_objects: u32,
+    pub offset: u32,
+    pub count: u32,
 }
 
 #[derive(Clone)]
@@ -39,6 +42,8 @@ pub struct Instance {
     pub collision: f32,
     pub gravity: f32,
     pub rotation: [f32; 4],
+    pub shader: ShaderType,
+    pub compute_shader: ComputeShaderType,
 }
 
 impl Default for Instance {
@@ -62,6 +67,8 @@ impl Default for Instance {
             collision: 0.0,
             gravity: 1.0,
             rotation: [0.0, 0.0, 0.0, 0.0],
+            shader: ShaderType::Pbr,
+            compute_shader: ComputeShaderType::FullPhysics,
         }
     }
 }
@@ -165,4 +172,6 @@ impl Transform {
 pub struct RenderBatch {
     pub mesh: Mesh,
     pub instances: Vec<Instance>,
+    pub shader: ShaderType,
+    pub compute_shader: ComputeShaderType,
 }

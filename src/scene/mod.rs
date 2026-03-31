@@ -12,7 +12,7 @@ use vulkano::command_buffer::RenderPassBeginInfo;
 use vulkano::command_buffer::SubpassContents;
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, CopyBufferInfoTyped,
-    PrimaryAutoCommandBuffer,
+    PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract,
 };
 use vulkano::descriptor_set::{
     allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -32,9 +32,17 @@ use vulkano::DeviceSize;
 
 use crate::geometry::Mesh;
 use crate::input::MouseState;
+use crate::rendering::compute_registry::ComputeShaderType;
 use crate::rendering::pipeline::UniformBufferObject;
+use crate::rendering::shader_registry::{ShaderRegistry, ShaderType};
 use crate::scene::animation::AnimationType;
 use crate::scene::object::{Instance, InstanceData, RenderBatch, Texture, Transform};
+use crate::rendering::compute_registry::ComputeShaderRegistry;
+pub struct ComputeDispatchInfo {
+    pub compute_shader: ComputeShaderType,
+    pub offset: u32,
+    pub count: u32,
+}
 
 pub struct RenderScene {
     // pub max_instances: usize,
@@ -64,8 +72,13 @@ pub struct InstanceHandle {
 
 impl RenderScene {
     pub fn add_instance(&mut self, mesh: Mesh, instance: Instance) -> InstanceHandle {
+        let shader = instance.shader;
+        let compute_shader = instance.compute_shader;
         for (batch_index, batch) in self.batches.iter_mut().enumerate() {
-            if batch.mesh.vertices.buffer() == mesh.vertices.buffer() {
+            if batch.mesh.vertices.buffer() == mesh.vertices.buffer()
+                && batch.shader == shader
+                && batch.compute_shader == compute_shader
+            {
                 batch.instances.push(instance);
 
                 return InstanceHandle {
@@ -77,6 +90,8 @@ impl RenderScene {
 
         self.batches.push(RenderBatch {
             mesh,
+            shader,
+            compute_shader,
             instances: vec![instance],
         });
 
@@ -189,16 +204,133 @@ impl RenderScene {
         scene
     }
 
-    pub fn upload_to_gpu(&mut self, allocator: &Arc<StandardMemoryAllocator>, queue: &Arc<Queue>) {
+    
+    pub fn upload_to_gpu(
+        &mut self, 
+        allocator: &Arc<StandardMemoryAllocator>, 
+        queue: &Arc<Queue>, 
+        compute_registry: &ComputeShaderRegistry 
+    ) -> Vec<ComputeDispatchInfo> {
         let total_instances: usize = self.batches.iter().map(|batch| batch.instances.len()).sum();
 
         self.total_instances = total_instances as u32;
         if total_instances == 0 {
-            return;
+            return vec![];
         }
+
+        let total_instances: usize = self.batches.iter().map(|batch| batch.instances.len()).sum();
+        self.total_instances = total_instances as u32;
+        if total_instances == 0 { return vec![]; }
+
+        // getting the override
+        let override_shader = compute_registry.scene_shader();
+
+        // If an override exists, we don't need to sort or batch. 
+        // We just create one single dispatch for the whole buffer.
+        if let shader_type = override_shader {
+            let mut flat_data = Vec::with_capacity(total_instances);
+            for batch in &self.batches {
+                for inst in &batch.instances {
+                    flat_data.push(InstanceData {
+                        model: inst.model_matrix,
+                        color: [inst.color[0], inst.color[1], inst.color[2], inst.emissive],
+                        mat_props: [inst.roughness, inst.metalness, 0.0, 0.0],
+                        physic: [inst.collision, inst.mass, inst.gravity, 0.0],
+                        velocity: inst.velocity,
+                        rotation: inst.rotation,
+                    });
+                }
+            }
+            let device = queue.device();
+
+            let staging = Buffer::from_iter(
+                allocator,
+                BufferCreateInfo {
+                    usage: BufferUsage::TRANSFER_SRC,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    usage: MemoryUsage::Upload,
+                    ..Default::default()
+                },
+                flat_data,
+            )
+            .unwrap();
+
+            let cmd_allocator = StandardCommandBufferAllocator::new(device.clone(), Default::default());
+            let mut builder = AutoCommandBufferBuilder::primary(
+                &cmd_allocator,
+                queue.queue_family_index(),
+                CommandBufferUsage::OneTimeSubmit,
+            )
+            .unwrap();
+
+            let copy_count = self.total_instances as u64;
+            builder
+                .copy_buffer(CopyBufferInfoTyped::buffers(
+                    staging.clone(),
+                    self.physics_read.clone().slice(0..copy_count),
+                ))
+                .unwrap();
+
+            let cb = builder.build().unwrap();
+
+            let future = cb.execute(queue.clone()).unwrap();
+
+            future.then_signal_fence_and_flush().unwrap().wait(None).unwrap();
+
+            builder = AutoCommandBufferBuilder::primary(
+                &cmd_allocator,
+                queue.queue_family_index(),
+                CommandBufferUsage::OneTimeSubmit,
+            )
+            .unwrap();
+
+            builder
+                .copy_buffer(CopyBufferInfoTyped::buffers(
+                    staging.clone(),
+                    self.physics_write.clone().slice(0..copy_count),
+                ))
+                .unwrap();
+
+            let cb = builder.build().unwrap();
+
+            let future = cb.execute(queue.clone()).unwrap();
+
+            future.then_signal_fence_and_flush().unwrap().wait(None).unwrap();
+
+            return vec![ComputeDispatchInfo {
+                compute_shader: shader_type,
+                offset: 0,
+                count: total_instances as u32,
+            }];
+        }
+
+        // Sort by ComputeShader then FragShader to organize memory layout
+        self.batches.sort_by_key(|b| (b.compute_shader.sort_key(), b.shader.sort_key()));
+
+        let mut dispatches = Vec::new();
+        let mut current_compute = self.batches[0].compute_shader;
+        let mut current_offset = 0;
+        let mut current_count = 0;
 
         let mut flat_data = Vec::with_capacity(total_instances);
         for batch in &self.batches {
+            let count = batch.instances.len() as u32;
+            if batch.compute_shader != current_compute {
+                if current_count > 0 {
+                    dispatches.push(ComputeDispatchInfo {
+                        compute_shader: current_compute,
+                        offset: current_offset,
+                        count: current_count,
+                    });
+                }
+                current_compute = batch.compute_shader;
+                current_offset += current_count;
+                current_count = 0;
+            }
+            current_count += count;
+
             for inst in &batch.instances {
                 flat_data.push(InstanceData {
                     model: inst.model_matrix,
@@ -243,22 +375,41 @@ impl RenderScene {
             ))
             .unwrap();
 
+        let cb = builder.build().unwrap();
+
+        let future = cb.execute(queue.clone()).unwrap();
+
+        future.then_signal_fence_and_flush().unwrap().wait(None).unwrap();
+
+        builder = AutoCommandBufferBuilder::primary(
+            &cmd_allocator,
+            queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .unwrap();
+
         builder
             .copy_buffer(CopyBufferInfoTyped::buffers(
-                staging,
+                staging.clone(),
                 self.physics_write.clone().slice(0..copy_count),
             ))
             .unwrap();
 
-        let cmd = builder.build().unwrap();
+        let cb = builder.build().unwrap();
 
-        vulkano::sync::now(device.clone())
-            .then_execute(queue.clone(), cmd)
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
+        let future = cb.execute(queue.clone()).unwrap();
+
+        future.then_signal_fence_and_flush().unwrap().wait(None).unwrap();
+
+        if current_count > 0 {
+            dispatches.push(ComputeDispatchInfo {
+                compute_shader: current_compute,
+                offset: current_offset,
+                count: current_count,
+            });
+        }
+
+        dispatches
     }
 
     pub fn ensure_descriptor_cache(
@@ -316,14 +467,18 @@ impl RenderScene {
         }
     }
 
+    /// Draw all batches using a single pipeline (backward compatible).
+    /// Used by main.rs which creates its own pipeline directly.
     pub fn record_draws(
         &mut self,
         builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         pipeline: &Arc<GraphicsPipeline>,
         frame_index: usize,
-        physics_buffer_index: usize, // Pass 0 for Read, 1 for Write
+        physics_buffer_index: usize,
     ) {
         let mut current_offset = 0;
+
+        builder.bind_pipeline_graphics(pipeline.clone());
 
         for batch in &self.batches {
             let count = batch.instances.len() as u32;
@@ -334,10 +489,61 @@ impl RenderScene {
             builder.bind_vertex_buffers(0, (batch.mesh.vertices.clone(),));
 
             let requested_tex = batch.mesh.base_color_texture.unwrap_or(0);
+            let descriptor_idx = (requested_tex * 2) + physics_buffer_index;
 
-            // Calculate the descriptor:
-            // Tex 0 starts at 0 (Buffer A) and 1 (Buffer B)
-            // Tex 1 starts at 2 (Buffer A) and 3 (Buffer B)
+            builder.bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                pipeline.layout().clone(),
+                0,
+                self.descriptor_sets[frame_index][descriptor_idx].clone(),
+            );
+
+            if let Some(indices) = &batch.mesh.indices {
+                builder.bind_index_buffer(indices.clone());
+                builder
+                    .draw_indexed(batch.mesh.index_count, count, 0, 0, current_offset)
+                    .unwrap();
+            } else {
+                builder
+                    .draw(batch.mesh.vertex_count, count, 0, current_offset)
+                    .unwrap();
+            }
+
+            current_offset += count;
+        }
+    }
+
+    /// Draw all batches using the multi-shader registry.
+    /// Sorts batches by shader type to minimize pipeline switches.
+    pub fn record_draws_multi(
+        &mut self,
+        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        registry: &ShaderRegistry,
+        frame_index: usize,
+        physics_buffer_index: usize,
+    ) {
+        let mut current_offset = 0;
+        let mut last_shader: Option<ShaderType> = None;
+
+        for batch in &self.batches {
+            let count = batch.instances.len() as u32;
+            if count == 0 {
+                continue;
+            }
+
+            // Resolve effective shader (scene override or per-batch)
+            let effective_shader = registry.resolve_shader(batch.shader);
+            let pipeline = registry.get_pipeline(effective_shader);
+
+            // Only rebind pipeline if shader changed
+            if last_shader != Some(effective_shader) {
+                builder.bind_pipeline_graphics(pipeline.clone()) ;
+                last_shader = Some(effective_shader);
+            }
+
+            builder.bind_vertex_buffers(0, (batch.mesh.vertices.clone(),));
+
+            let requested_tex = batch.mesh.base_color_texture.unwrap_or(0);
             let descriptor_idx = (requested_tex * 2) + physics_buffer_index;
 
             builder.bind_descriptor_sets(
@@ -466,17 +672,20 @@ impl RenderScene {
 
 pub fn record_compute_physics(
     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-    compute_pipeline: &Arc<ComputePipeline>,
+    compute_pipeline: &Arc<vulkano::pipeline::ComputePipeline>,
     compute_set: &Arc<PersistentDescriptorSet>,
-    total_objects: u32,
+    max_instances: u32,
     dt: f32,
-    solid_count: u32,
+    total_objects: u32,
 ) {
-    let workgroups_x = (total_objects + 255) / 256;
+    let workgroups_x = (max_instances as u32 + 255) / 256;
+    if workgroups_x == 0 {
+        return;
+    }
     builder
         .bind_pipeline_compute(compute_pipeline.clone())
         .bind_descriptor_sets(
-            PipelineBindPoint::Compute,
+            vulkano::pipeline::PipelineBindPoint::Compute,
             compute_pipeline.layout().clone(),
             0,
             compute_set.clone(),
@@ -484,14 +693,61 @@ pub fn record_compute_physics(
         .push_constants(
             compute_pipeline.layout().clone(),
             0,
-            PhysicsPushConstants {
+            crate::scene::object::PhysicsPushConstants {
                 dt,
-                object_count: total_objects,
-                solid_count,
+                total_objects,
+                offset: 0,
+                count: max_instances as u32,
             },
         )
         .dispatch([workgroups_x, 1, 1])
         .unwrap();
+}
+
+pub fn record_compute_physics_multi(
+    builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    registry: &crate::rendering::compute_registry::ComputeShaderRegistry,
+    compute_set: &Arc<PersistentDescriptorSet>,
+    dispatches: &[ComputeDispatchInfo],
+    dt: f32,
+    total_objects: u32,
+) {
+    let override_shader = registry.scene_shader_optional();
+    let mut last_bound = None;
+
+    for dispatch in dispatches {
+        // Use override if available, otherwise use the dispatch's own shader
+        let shader_to_use = override_shader.unwrap_or(dispatch.compute_shader);
+        let compute_pipeline = registry.get_pipeline(shader_to_use);
+
+        if last_bound != Some(shader_to_use) {
+            builder.bind_pipeline_compute(compute_pipeline.clone());
+            builder.bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                compute_pipeline.layout().clone(),
+                0,
+                compute_set.clone(),
+            );
+            last_bound = Some(shader_to_use);
+        }
+
+        let workgroups_x = (dispatch.count + 255) / 256;
+        if workgroups_x > 0 {
+            builder
+                .push_constants(
+                    compute_pipeline.layout().clone(),
+                    0,
+                    PhysicsPushConstants {
+                        dt,
+                        total_objects,
+                        offset: dispatch.offset,
+                        count: dispatch.count,
+                    },
+                )
+                .dispatch([workgroups_x, 1, 1])
+                .unwrap();
+        }
+    }
 }
 
 pub fn begin_render_pass_only(

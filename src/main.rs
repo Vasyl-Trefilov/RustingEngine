@@ -134,8 +134,8 @@ fn main() {
         &pipeline,
         &base.queue,
         3,
-        1_000_000,
-    ); // 1_000_000
+        10_000,  // Reduced to actual scene need
+    );
     let mut camera = Camera {
         position: [0.0, 5.0, 20.0],
         yaw: 90.0f32.to_radians(),
@@ -423,7 +423,7 @@ fn main() {
     //     }
     // );
 
-    scene.upload_to_gpu(&memory_allocator, &base.queue);
+    // scene.upload_to_gpu(&memory_allocator, &base.queue);
     scene.ensure_descriptor_cache(&pipeline, textures.len());
     let solid_object_count = scene.total_instances;
     println!("{:?}", solid_object_count);
@@ -658,13 +658,14 @@ fn main() {
                     .then_signal_fence_and_flush()
                     .unwrap();
 
-                compute_future.wait(None).unwrap(); // Wait for compute to finish
-
                 let mut render_builder = create_builder(&cb_allocator, &base.queue);
 
                 // Ensure descriptor cache is ready
                 let tex_count = scene.texture_views.len();
                 scene.ensure_descriptor_cache(&pipeline, tex_count);
+
+                // Wait for compute shader to finish before rendering
+                compute_future.wait(None).unwrap();
 
                 begin_render_pass_only(
                     &mut render_builder,
