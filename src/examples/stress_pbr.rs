@@ -1,4 +1,4 @@
-use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, Transform};
+use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, Transform, CollisionType};
 /// # Stress Test: 10,000 PBR Cubes
 /// This example spawns 10,000 objects utilizing standard PBR shading.
 /// It highlights frame-rate impact relative to the Unlit version, as PBR 
@@ -19,7 +19,7 @@ pub fn main() {
     
     // Spawn 10,000 interactive physical cubes 
     for x in 0..grid_size {
-        for y in 0..25 {
+        for y in 0..1 {
             for z in 0..grid_size {
                 let pos = [
                     (x as f32 - grid_size as f32 / 2.0) * 1.5,
@@ -38,10 +38,10 @@ pub fn main() {
                     },
                     mat,
                     &Physics::default()
-                        .compute_shader(ComputeShaderType::MidPhysic)
+                        .compute_shader(ComputeShaderType::Static)
                         .velocity([0.0, 0.0, 0.0, radius]) // 20 is collision radius
                         .mass(1.0)
-                        .collision(0.2) // type, if < 0.5 => Box, > 0.5 => Sphere
+                        .collision(CollisionType::Box) // type, if < 0.5 => Box, > 0.5 => Sphere
                         .gravity(1.0),
                 );
             }
@@ -50,8 +50,8 @@ pub fn main() {
 
     engine.add_sphere(
         Transform {
-            position: [0.0, 200.0, 0.0],
-            scale: [20.0, 20.0, 20.0],
+            position: [0.0, 100.0, 0.0],
+            scale: [10.0, 10.0, 10.0],
             ..Default::default()
         },
     &Material::standard()
@@ -59,17 +59,18 @@ pub fn main() {
             .shader(ShaderType::Pbr)
             .build(),
     &Physics::default()
-            .compute_shader(ComputeShaderType::MidPhysic)
+            .compute_shader(ComputeShaderType::Static)
             .mass(1000.0)
+            .gravity(1.0)
             .velocity([0.0, 0.0, 0.0, 40.0])  // 40 is collision radius
-            .collision(0.7), // type, if < 0.5 => Box, > 0.5 => Sphere
+            .collision(CollisionType::Sphere), // type, if < 0.5 => Box, > 0.5 => Sphere
         );
 
     // A large floor
     engine.add_cube(
         Transform {
-            position: [0.0, 4.0, 0.0],
-            scale: [40.0, 1.0, 40.0],
+            position: [30.0, 4.0, 0.0],
+            scale: [10.0, 1.0, 10.0],
             ..Default::default()
         },
         &Material::standard()
@@ -79,12 +80,12 @@ pub fn main() {
         &Physics::default()
             .compute_shader(ComputeShaderType::MidPhysic)
             .gravity(0.0)
-            .mass(1000000000.0)
+            .mass(0.0)
             .velocity([0.0, 0.0, 0.0, 20.0])  // 20 is collision radius
-            .collision(0.2), // type, if < 0.5 => Box, > 0.5 => Sphere
+            .collision(CollisionType::Box), // type, if < 0.5 => Box, > 0.5 => Sphere
         );
 
-    engine.set_scene_shader(ShaderType::Pbr);
-    engine.set_scene_physic(ComputeShaderType::FullPhysics);
+    // engine.set_scene_shader(ShaderType::Pbr);
+    // engine.set_scene_physic(ComputeShaderType::FullPhysics);
     engine.run();
 }

@@ -11,3 +11,4 @@ pub use core::{Material, MaterialBuilder, Physics, ShaderType, Transform};
 pub use engine::{Engine, PerspectiveCamera};
 pub use geometry::Mesh;
 pub use rendering::compute_registry::ComputeShaderType;
+pub use core::collisions::CollisionType;

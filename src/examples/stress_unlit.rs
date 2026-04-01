@@ -1,4 +1,4 @@
-use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, Transform};
+use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, Transform, CollisionType};
 /// # Stress Test: 10,000 Unlit Cubes
 /// This example spawns 10,000 objects completely bypassing PBR shading and utilizing Unlit.
 /// It emphasizes the GPU performance gains achievable when disabling 
@@ -36,7 +36,7 @@ pub fn main() {
                         .compute_shader(ComputeShaderType::Static)
                         .velocity([0.0, 0.0, 0.0, 0.5])
                         .mass(1.0)
-                        .collision(0.2)
+                        .collision(CollisionType::Box)
                         .gravity(1.0),
                 );
             }

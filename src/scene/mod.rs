@@ -8,6 +8,7 @@ use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{
     StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
 };
+use std::collections::HashMap;
 use vulkano::command_buffer::RenderPassBeginInfo;
 use vulkano::command_buffer::SubpassContents;
 use vulkano::command_buffer::{
@@ -222,22 +223,20 @@ impl RenderScene {
         self.total_instances = total_instances as u32;
         if total_instances == 0 { return vec![]; }
 
-        // getting the override
-        let override_shader = compute_registry.scene_shader();
 
-        // If an override exists, we don't need to sort or batch. 
-        // We just create one single dispatch for the whole buffer.
-        if let shader_type = override_shader {
+        let override_shader = compute_registry.scene_shader_optional();
+        
+        if let Some(shader_type)  = override_shader {
             let mut flat_data = Vec::with_capacity(total_instances);
             for batch in &self.batches {
                 for inst in &batch.instances {
                     flat_data.push(InstanceData {
-                        model: inst.model_matrix,
-                        color: [inst.color[0], inst.color[1], inst.color[2], inst.emissive],
+                        model: inst.model_matrix, // [3].xyz = position, [0..2] = rotation 0=x, 1=y, 2=z
+                        color: [inst.color[0], inst.color[1], inst.color[2], inst.emissive], 
                         mat_props: [inst.roughness, inst.metalness, 0.0, 0.0],
-                        physic: [inst.collision, inst.mass, inst.gravity, 0.0],
-                        velocity: inst.velocity,
-                        rotation: inst.rotation,
+                        physic: [inst.collision, inst.mass, inst.gravity, 0.0], // x is collision type, y is mass, z is gravity power, w is unused
+                        velocity: inst.velocity, // x, y, z is velocity. w is collision radius
+                        rotation: inst.rotation, // rotation speed x, y, z. W is unused
                     });
                 }
             }
@@ -707,19 +706,22 @@ pub fn record_compute_physics(
 pub fn record_compute_physics_multi(
     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     registry: &crate::rendering::compute_registry::ComputeShaderRegistry,
-    compute_set: &Arc<PersistentDescriptorSet>,
+    compute_sets: &HashMap<
+        ComputeShaderType,
+        (Arc<PersistentDescriptorSet>, Arc<PersistentDescriptorSet>),
+    >,
     dispatches: &[ComputeDispatchInfo],
     dt: f32,
     total_objects: u32,
+    ping_pong: bool
 ) {
-    let override_shader = registry.scene_shader_optional();
     let mut last_bound = None;
 
     for dispatch in dispatches {
-        // Use override if available, otherwise use the dispatch's own shader
-        let shader_to_use = override_shader.unwrap_or(dispatch.compute_shader);
+        let shader_to_use = dispatch.compute_shader;
         let compute_pipeline = registry.get_pipeline(shader_to_use);
-
+        let (set_0, set_1) = compute_sets.get(&shader_to_use).unwrap();
+        let compute_set = if ping_pong { set_1 } else { set_0 };
         if last_bound != Some(shader_to_use) {
             builder.bind_pipeline_compute(compute_pipeline.clone());
             builder.bind_descriptor_sets(
@@ -730,7 +732,6 @@ pub fn record_compute_physics_multi(
             );
             last_bound = Some(shader_to_use);
         }
-
         let workgroups_x = (dispatch.count + 255) / 256;
         if workgroups_x > 0 {
             builder
@@ -749,7 +750,6 @@ pub fn record_compute_physics_multi(
         }
     }
 }
-
 pub fn begin_render_pass_only(
     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     framebuffers: &[Arc<Framebuffer>],

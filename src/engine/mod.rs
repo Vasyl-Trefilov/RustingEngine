@@ -5,7 +5,7 @@ use winit::event::{Event, MouseButton, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::run_return::EventLoopExtRunReturn;
 use winit::window::CursorGrabMode;
-
+use std::collections::HashMap;
 use vulkano::sync::GpuFuture;
 
 use crate::core::{Material, Physics, Transform};
@@ -242,10 +242,11 @@ impl Engine {
             color: mat.color,
             velocity: phys.velocity,
             mass: phys.mass,
-            collision: phys.collision,
+            collision: phys.collision.sort_key(),
             gravity: phys.gravity,
             shader: mat.shader,
             compute_shader: phys.compute_shader,
+            // rotation: [0.2, 0.2, 0.2, 0.0],
             ..Default::default()
         };
         self.scene.lock().unwrap().add_instance(mesh, inst);
@@ -280,7 +281,7 @@ impl Engine {
             color: mat.color,
             velocity: phys.velocity,
             mass: phys.mass,
-            collision: phys.collision,
+            collision: phys.collision.sort_key(),
             gravity: phys.gravity,
             shader: mat.shader,
             compute_shader: phys.compute_shader,
@@ -317,13 +318,16 @@ impl Engine {
         let mut previous_frame_end: Option<Box<dyn GpuFuture>> =
             Some(sync::now(self.base.device.clone()).boxed());
         let effective_compute_type = self.compute_registry.scene_shader();
-        let current_phys_type = self.compute_registry.scene_shader();
-
         let (physics_read, physics_write, mut solid_obj_count, dispatches) = {
             let mut s = self.scene.lock().unwrap();
-            let d = s.upload_to_gpu(&self.memory_allocator, &self.base.queue, &self.compute_registry);
+            let d = s.upload_to_gpu(
+                &self.memory_allocator,
+                &self.base.queue,
+                &self.compute_registry,
+            );
             let tex_count = s.texture_views.len();
             s.ensure_descriptor_cache(self.registry.default_pipeline(), tex_count);
+
             (
                 s.physics_read.clone(),
                 s.physics_write.clone(),
@@ -332,32 +336,53 @@ impl Engine {
             )
         };
 
+        //
+        // Build descriptor sets per compute shader
+        //
+        let mut compute_sets: HashMap<
+            ComputeShaderType,
+            (Arc<PersistentDescriptorSet>, Arc<PersistentDescriptorSet>),
+        > = HashMap::new();
 
+        let mut used_shaders = HashSet::new();
+        for dispatch in &dispatches {
+            used_shaders.insert(dispatch.compute_shader);
+        }
 
-    // Use that shader's layout for the descriptor sets
-    let compute_layout = self.compute_registry
-        .get_pipeline(effective_compute_type)
-        .layout()
-        .set_layouts()[0]
-        .clone();
-        let set_0 = PersistentDescriptorSet::new(
-            &self.descriptor_set_allocator,
-            compute_layout.clone(),
-            [
-                WriteDescriptorSet::buffer(0, physics_read.clone()),
-                WriteDescriptorSet::buffer(1, physics_write.clone()),
-            ],
-        )
-        .unwrap();
-        let set_1 = PersistentDescriptorSet::new(
-            &self.descriptor_set_allocator,
-            compute_layout.clone(),
-            [
-                WriteDescriptorSet::buffer(0, physics_write.clone()),
-                WriteDescriptorSet::buffer(1, physics_read.clone()),
-            ],
-        )
-        .unwrap();
+        if let Some(scene_shader) = self.compute_registry.scene_shader_optional() {
+            used_shaders.insert(scene_shader);
+        }
+
+        for shader in used_shaders {
+            let compute_layout = self
+                .compute_registry
+                .get_pipeline(shader)
+                .layout()
+                .set_layouts()[0]
+                .clone();
+
+            let set_0 = PersistentDescriptorSet::new(
+                &self.descriptor_set_allocator,
+                compute_layout.clone(),
+                [
+                    WriteDescriptorSet::buffer(0, physics_read.clone()),
+                    WriteDescriptorSet::buffer(1, physics_write.clone()),
+                ],
+            )
+            .unwrap();
+
+            let set_1 = PersistentDescriptorSet::new(
+                &self.descriptor_set_allocator,
+                compute_layout.clone(),
+                [
+                    WriteDescriptorSet::buffer(0, physics_write.clone()),
+                    WriteDescriptorSet::buffer(1, physics_read.clone()),
+                ],
+            )
+            .unwrap();
+
+            compute_sets.insert(shader, (set_0, set_1));
+        }
 
         let mut framebuffers =
             create_framebuffers(&self.images, &self.render_pass, &self.memory_allocator);
@@ -507,17 +532,20 @@ impl Engine {
 
                     let mut comp_builder =
                         create_builder(&self.command_buffer_allocator, &self.base.queue);
+
                     let mut physics_ran = false;
+
                     while accumulator >= fixed_dt {
-                        let active_set = if compute_ping_pong { &set_1 } else { &set_0 };
                         record_compute_physics_multi(
                             &mut comp_builder,
                             &self.compute_registry,
-                            active_set,
+                            &compute_sets,
                             &dispatches,
                             fixed_dt,
                             solid_obj_count,
+                            compute_ping_pong,
                         );
+
                         compute_ping_pong = !compute_ping_pong;
                         accumulator -= fixed_dt;
                         physics_ran = true;
@@ -588,6 +616,7 @@ impl Engine {
             }
         });
     }
+    
 }
 
 #[derive(Default)]

@@ -1,10 +1,11 @@
 use crate::core::ComputeShaderType;
+use crate::core::collisions::CollisionType;
 
 #[derive(Clone, Debug)]
 pub struct Physics {
     pub velocity: [f32; 4],
     pub mass: f32,
-    pub collision: f32,
+    pub collision: CollisionType,
     pub gravity: f32,
     pub compute_shader: ComputeShaderType,
 }
@@ -14,7 +15,7 @@ impl Default for Physics {
         Self {
             velocity: [0.0, 0.0, 0.0, 1.0],
             mass: 1.0,
-            collision: 0.0,
+            collision: CollisionType::Sphere,
             gravity: 1.0,
             compute_shader: ComputeShaderType::FullPhysics,
         }
@@ -32,7 +33,7 @@ impl Physics {
         self
     }
 
-    pub fn collision(mut self, c: f32) -> Self {
+    pub fn collision(mut self, c: CollisionType) -> Self {
         self.collision = c;
         self
     }

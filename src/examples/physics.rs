@@ -1,4 +1,4 @@
-use rusting_engine::{Engine, Material, Physics, Transform};
+use rusting_engine::{Engine, Material, Physics, Transform, CollisionType};
 
 /// # Physics Gravity & Collision Example
 /// This example demonstrates how hundreds of instanced objects can dynamically interact 
@@ -21,7 +21,7 @@ pub fn main() {
                     &Physics::default()
                         .velocity([0.0, 0.0, 0.0, 0.5]) // w=0.5 defines collision radius
                         .mass(1.0)
-                        .collision(0.2)
+                        .collision(CollisionType::Box)
                         .gravity(0.0), // Starts with zero gravity
                 );
             }
@@ -39,7 +39,7 @@ pub fn main() {
         &Physics::default()
             .velocity([0.0, -15.0, 0.0, 7.5]) // Moving downwards
             .mass(100000.0) // Very heavy
-            .collision(1.0)
+            .collision(CollisionType::Sphere)
             .gravity(1.0), // Standard gravity
     );
 

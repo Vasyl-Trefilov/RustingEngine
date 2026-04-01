@@ -2,40 +2,7 @@ pub mod cs1 {
     // this is test shader for fast physic disable
     vulkano_shaders::shader! {
         ty: "compute",
-        src: "
-        #version 450
-
-        layout(local_size_x = 256) in;
-
-        struct InstanceData {
-            mat4 model;
-            vec4 color;
-            vec4 mat_props;
-            vec4 velocity;
-            vec4 physic;
-        };
-
-        layout(std430, set = 0, binding = 0) readonly buffer ReadBuffer {
-            InstanceData data[];
-        } read_buf;
-
-        layout(std430, set = 0, binding = 1) writeonly buffer WriteBuffer {
-            InstanceData data[];
-        } write_buf;
-
-        layout(push_constant) uniform PushConstants {
-            float dt;
-            uint total_objects;
-            uint offset;
-            uint count;
-        } pc;
-
-        void main() {
-            uint i = gl_GlobalInvocationID.x + pc.offset;
-            if (i >= pc.offset + pc.count) return;
-            write_buf.data[i] = read_buf.data[i];
-        }
-        ",
+        path: "src/shaders/compute/basic.glsl",
     }
 }
 
@@ -44,7 +11,7 @@ pub mod cs_max {
     vulkano_shaders::shader! {
         ty: "compute",
         src: "
-       #version 450
+        #version 450
 
         layout(local_size_x = 256) in;
 
@@ -914,7 +881,7 @@ pub mod fs {
             float vignette = 1.0 - dot(center_dist, center_dist) * 1.2;
             result *= clamp(vignette, 0.0, 1.0);
 
-            result = vec3(1.0) - exp(-result * 1.2);
+            result = vec3(1.0) - exp(-result * 1.2); 
 
             f_color = vec4(result, tex_raw.a);
         }

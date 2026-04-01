@@ -1,4 +1,4 @@
-use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, Transform};
+use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, Transform, CollisionType};
 
 /// # Shaders Example
 /// This example demonstrates how to assign various rendering configurations,
@@ -46,7 +46,7 @@ pub fn main() {
         &Physics::default()
             .velocity([0.0, -10.0, 0.0, 2.0]) // w=2.0 is collision threshold
             .mass(100.0)
-            .collision(0.9) // Bouncy
+            .collision(CollisionType::Sphere) // Bouncy
             .gravity(1.0),
     );
 

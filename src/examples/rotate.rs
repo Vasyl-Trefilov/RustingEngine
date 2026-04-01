@@ -1,4 +1,4 @@
-use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, Transform};
+use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, Transform, CollisionType};
 /// # Rotating test
 /// This example spawns a sphere on the on the floor and cube that fall on it and roll
 /// This test shows how accurate and 'good' cs_max( FullPhysic ) is
@@ -21,7 +21,7 @@ pub fn main() {
             .gravity(0.2)
             .mass(1.0)
             .velocity([0.0, 0.0, 0.0, 0.5])  // 0.5 is collision radius
-            .collision(0.2), // type, if < 0.5 => Box, > 0.5 => Sphere
+            .collision(CollisionType::Box), // type, if < 0.5 => Box, > 0.5 => Sphere
         );
 
     engine.add_sphere(
@@ -38,7 +38,7 @@ pub fn main() {
             .compute_shader(ComputeShaderType::FullPhysics)
             .mass(1.0)
             .velocity([0.0, 0.0, 0.0, 1.0])  // 10 is collision radius
-            .collision(0.7), // type, if < 0.5 => Box, > 0.5 => Sphere
+            .collision(CollisionType::Sphere), // type, if < 0.5 => Box, > 0.5 => Sphere
         );
 
     // A large floor
@@ -56,7 +56,7 @@ pub fn main() {
             .gravity(0.0)
             .mass(1000000.0)
             .velocity([0.0, 0.0, 0.0, 20.0])  // 20 is collision radius
-            .collision(0.2), // type, if < 0.5 => Box, > 0.5 => Sphere
+            .collision(CollisionType::Box), // type, if < 0.5 => Box, > 0.5 => Sphere
         );
     engine.run();
 }
