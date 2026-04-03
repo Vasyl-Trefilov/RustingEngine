@@ -44,17 +44,16 @@ pub fn main() {
         },
         &emissive_mat,
         &Physics::default()
-            .velocity([0.0, -10.0, 0.0, 2.0]) // w=2.0 is collision threshold
             .mass(100.0)
-            .collision(CollisionType::Sphere) // Bouncy
-            .gravity(1.0),
+            .collision_type(CollisionType::Sphere),
+            2
     );
 
     // A PBR cube falling
     engine.add_cube(
         Transform { position: [2.0, 20.0, 2.0], ..Default::default() },
         &pbr_mat,
-        &Physics::default().velocity([0.0, 0.0, 0.0, 1.0]).mass(10.0).gravity(1.0),
+        &Physics::default().mass(10.0),
     );
 
     engine.run();

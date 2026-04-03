@@ -19,7 +19,7 @@ pub fn main() {
     
     // Spawn 10,000 interactive physical cubes 
     for x in 0..grid_size {
-        for y in 0..1 {
+        for y in 0..25 {
             for z in 0..grid_size {
                 let pos = [
                     (x as f32 - grid_size as f32 / 2.0) * 1.5,
@@ -38,54 +38,60 @@ pub fn main() {
                     },
                     mat,
                     &Physics::default()
-                        .compute_shader(ComputeShaderType::Static)
-                        .velocity([0.0, 0.0, 0.0, radius]) // 20 is collision radius
+                        .compute_shader(ComputeShaderType::Test)
                         .mass(1.0)
-                        .collision(CollisionType::Box) // type, if < 0.5 => Box, > 0.5 => Sphere
-                        .gravity(1.0),
+                        .collision_type(CollisionType::Box) 
+                        .gravity_scale(1.0),
                 );
             }
         }
     }
 
+    // for x in 0..grid_size {
+    //     for y in 0..25 {
+    //         for z in 0..grid_size {
+    //             let pos = [
+    //                 (x as f32 - grid_size as f32 / 2.0) * 3.0,
+    //                 y as f32 * 3.0 + 20.0,
+    //                 (z as f32 - grid_size as f32 / 2.0) * 3.0,
+    //             ];
+    //             let mat = if (x + y + z) % 2 == 0 { &red_pbr } else { &green_pbr };
+    //             engine.add_sphere(
+    //                 Transform {
+    //                     position: pos,
+    //                     scale: [1.0, 1.0, 1.0],
+    //                     ..Default::default()
+    //                 },
+    //                 mat,
+    //                 &Physics::default()
+    //                     .compute_shader(ComputeShaderType::Test)
+    //                     .mass(1.0)
+    //                     .collision_type(CollisionType::Sphere)
+    //                     .gravity_scale(1.0),
+    //                 2
+    //             );
+    //         }
+    //     }
+    // }
     engine.add_sphere(
         Transform {
-            position: [0.0, 100.0, 0.0],
+            position: [0.0, 3000.0, 0.0],
             scale: [10.0, 10.0, 10.0],
             ..Default::default()
         },
     &Material::standard()
-            .color([1.0, 0.1, 0.1])
+            .color([0.1, 1.0, 0.1])
             .shader(ShaderType::Pbr)
             .build(),
     &Physics::default()
-            .compute_shader(ComputeShaderType::Static)
-            .mass(1000.0)
-            .gravity(1.0)
-            .velocity([0.0, 0.0, 0.0, 40.0])  // 40 is collision radius
-            .collision(CollisionType::Sphere), // type, if < 0.5 => Box, > 0.5 => Sphere
+            .compute_shader(ComputeShaderType::Test)
+            .mass(10000.0)
+            .gravity_scale(10.0)
+            .collision_type(CollisionType::Sphere),
+            2
         );
 
-    // A large floor
-    engine.add_cube(
-        Transform {
-            position: [30.0, 4.0, 0.0],
-            scale: [10.0, 1.0, 10.0],
-            ..Default::default()
-        },
-        &Material::standard()
-            .color([0.5, 0.5, 0.5])
-            .shader(ShaderType::Unlit)
-            .build(),
-        &Physics::default()
-            .compute_shader(ComputeShaderType::MidPhysic)
-            .gravity(0.0)
-            .mass(0.0)
-            .velocity([0.0, 0.0, 0.0, 20.0])  // 20 is collision radius
-            .collision(CollisionType::Box), // type, if < 0.5 => Box, > 0.5 => Sphere
-        );
-
-    // engine.set_scene_shader(ShaderType::Pbr);
-    // engine.set_scene_physic(ComputeShaderType::FullPhysics);
+    engine.set_scene_shader(ShaderType::Unlit);
+    engine.set_scene_physic(ComputeShaderType::Test);
     engine.run();
 }

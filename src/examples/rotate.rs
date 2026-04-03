@@ -18,10 +18,7 @@ pub fn main() {
             .shader(ShaderType::Pbr)
             .build(),
         &Physics::default()
-            .gravity(0.2)
-            .mass(1.0)
-            .velocity([0.0, 0.0, 0.0, 0.5])  // 0.5 is collision radius
-            .collision(CollisionType::Box), // type, if < 0.5 => Box, > 0.5 => Sphere
+            .collision_type(CollisionType::Box), 
         );
 
     engine.add_sphere(
@@ -36,9 +33,8 @@ pub fn main() {
             .build(),
     &Physics::default()
             .compute_shader(ComputeShaderType::FullPhysics)
-            .mass(1.0)
-            .velocity([0.0, 0.0, 0.0, 1.0])  // 10 is collision radius
-            .collision(CollisionType::Sphere), // type, if < 0.5 => Box, > 0.5 => Sphere
+            .collision_type(CollisionType::Sphere),
+            2
         );
 
     // A large floor
@@ -53,10 +49,8 @@ pub fn main() {
             .shader(ShaderType::Unlit)
             .build(),
         &Physics::default()
-            .gravity(0.0)
             .mass(1000000.0)
-            .velocity([0.0, 0.0, 0.0, 20.0])  // 20 is collision radius
-            .collision(CollisionType::Box), // type, if < 0.5 => Box, > 0.5 => Sphere
+            .collision_type(CollisionType::Box),
         );
     engine.run();
 }

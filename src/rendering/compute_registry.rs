@@ -4,7 +4,39 @@ use std::sync::Arc;
 use vulkano::device::Device;
 use vulkano::pipeline::ComputePipeline;
 
-use crate::shaders::{cs, cs1, cs_max};
+use crate::shaders::{cs, cs_basic, cs_empty, cs_full};
+
+/// Which descriptor bindings a compute shader needs
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ShaderBindings {
+    pub needs_read_buffer: bool,  // binding 0
+    pub needs_write_buffer: bool, // binding 1
+    pub needs_grid_counts: bool,  // binding 2
+    pub needs_grid_objects: bool, // binding 3
+    pub needs_big_indices: bool,  // binding 4
+}
+
+impl ShaderBindings {
+    pub fn basic() -> Self {
+        Self {
+            needs_read_buffer: true,
+            needs_write_buffer: true,
+            needs_grid_counts: false,
+            needs_grid_objects: false,
+            needs_big_indices: false,
+        }
+    }
+
+    pub fn grid_build() -> Self {
+        Self {
+            needs_read_buffer: true,
+            needs_write_buffer: false,
+            needs_grid_counts: true,
+            needs_grid_objects: true,
+            needs_big_indices: false,
+        }
+    }
+}
 
 /// Compute shader variant that determines how physics and transform logic is applied.
 /// `FullPhysics` is the most powerful one.
@@ -19,6 +51,12 @@ pub enum ComputeShaderType {
     Static,
     /// Fast physics logic (applies velocity and gravity) but skips object collisions check
     NoCollision,
+    /// Yes
+    GridBuild,
+    /// useless shader that has no effect on anything. You can use it to test for fast render without compute shader or I dont know
+    Empty,
+
+    Test,
 }
 
 impl ComputeShaderType {
@@ -28,6 +66,16 @@ impl ComputeShaderType {
             ComputeShaderType::MidPhysic => 1,
             ComputeShaderType::Static => 2,
             ComputeShaderType::NoCollision => 3,
+            ComputeShaderType::GridBuild => 4,
+            ComputeShaderType::Empty => 5,
+            ComputeShaderType::Test => 6,
+        }
+    }
+
+    pub fn needs_bindings(&self) -> ShaderBindings {
+        match self {
+            ComputeShaderType::GridBuild => ShaderBindings::grid_build(),
+            _ => ShaderBindings::basic(),
         }
     }
 }
@@ -42,7 +90,8 @@ impl ComputeShaderRegistry {
         let mut pipelines = HashMap::new();
 
         // Full physics
-        let cs_full = cs_max::load(device.clone()).expect("Failed to load FullPhysics compute shader");
+        let cs_full =
+            cs_full::load(device.clone()).expect("Failed to load FullPhysics compute shader");
         let cp_full = ComputePipeline::new(
             device.clone(),
             cs_full.entry_point("main").unwrap(),
@@ -65,8 +114,8 @@ impl ComputeShaderRegistry {
         .expect("Failed to create FullPhysics pipeline");
         pipelines.insert(ComputeShaderType::MidPhysic, cp_mid);
 
-        // Static (just copy the data)
-        let cs_static = cs1::load(device.clone()).expect("Failed to load Static compute shader");
+        let cs_static =
+            cs_empty::load(device.clone()).expect("Failed to load Static compute shader");
         let cp_static = ComputePipeline::new(
             device.clone(),
             cs_static.entry_point("main").unwrap(),
@@ -78,7 +127,8 @@ impl ComputeShaderRegistry {
         pipelines.insert(ComputeShaderType::Static, cp_static);
 
         // NoCollision (gravity and velocity, but no collision loop)
-        let cs_no_col = crate::shaders::cs2::load(device.clone()).expect("Failed to load NoCollision compute shader");
+        let cs_no_col = crate::shaders::cs2::load(device.clone())
+            .expect("Failed to load NoCollision compute shader");
         let cp_no_col = ComputePipeline::new(
             device.clone(),
             cs_no_col.entry_point("main").unwrap(),
@@ -89,7 +139,45 @@ impl ComputeShaderRegistry {
         .expect("Failed to create NoCollision pipeline");
         pipelines.insert(ComputeShaderType::NoCollision, cp_no_col);
 
-        Self { pipelines, scene_shader: None }
+        let cs_grid = crate::shaders::cs_grid_build::load(device.clone())
+            .expect("Failed to load GridBuild compute shader");
+        let cp_grid = ComputePipeline::new(
+            device.clone(),
+            cs_grid.entry_point("main").unwrap(),
+            &(),
+            None,
+            |_| {},
+        )
+        .expect("Failed to create GridBuild pipeline");
+        pipelines.insert(ComputeShaderType::GridBuild, cp_grid);
+
+        let cs_empty = crate::shaders::cs_empty::load(device.clone())
+            .expect("Failed to load Empty compute shader");
+        let cp_empty = ComputePipeline::new(
+            device.clone(),
+            cs_empty.entry_point("main").unwrap(),
+            &(),
+            None,
+            |_| {},
+        )
+        .expect("Failed to create Empty shader pipeline");
+        pipelines.insert(ComputeShaderType::Empty, cp_empty);
+
+        let cs_test = cs_full::load(device.clone()).expect("Failed to load Test compute shader");
+        let cp_test = ComputePipeline::new(
+            device.clone(),
+            cs_test.entry_point("main").unwrap(),
+            &(),
+            None,
+            |_| {},
+        )
+        .expect("Failed to create Test pipeline");
+        pipelines.insert(ComputeShaderType::Test, cp_test);
+
+        Self {
+            pipelines,
+            scene_shader: None,
+        }
     }
 
     pub fn get_pipeline(&self, shader_type: ComputeShaderType) -> &Arc<ComputePipeline> {
@@ -115,7 +203,8 @@ impl ComputeShaderRegistry {
 
     /// Return the scene physic shader or default
     pub fn scene_shader(&self) -> ComputeShaderType {
-        self.scene_shader.unwrap_or_else(|| self.get_default_shader())
+        self.scene_shader
+            .unwrap_or_else(|| self.get_default_shader())
     }
 
     /// Return the scene physic shader or None

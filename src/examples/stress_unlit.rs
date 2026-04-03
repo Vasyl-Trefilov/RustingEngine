@@ -34,10 +34,7 @@ pub fn main() {
                     mat,
                     &Physics::default()
                         .compute_shader(ComputeShaderType::Static)
-                        .velocity([0.0, 0.0, 0.0, 0.5])
-                        .mass(1.0)
-                        .collision(CollisionType::Box)
-                        .gravity(1.0),
+                        .collision_type(CollisionType::Box)
                 );
             }
         }

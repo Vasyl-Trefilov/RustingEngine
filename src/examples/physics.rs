@@ -19,10 +19,8 @@ pub fn main() {
                     Transform { position: pos, ..Default::default()},
                     &red,
                     &Physics::default()
-                        .velocity([0.0, 0.0, 0.0, 0.5]) // w=0.5 defines collision radius
-                        .mass(1.0)
-                        .collision(CollisionType::Box)
-                        .gravity(0.0), // Starts with zero gravity
+                        .collision_type(CollisionType::Box)
+                        .gravity_scale(0.0), // Starts with zero gravity
                 );
             }
         }
@@ -37,10 +35,9 @@ pub fn main() {
         },
         &green,
         &Physics::default()
-            .velocity([0.0, -15.0, 0.0, 7.5]) // Moving downwards
             .mass(100000.0) // Very heavy
-            .collision(CollisionType::Sphere)
-            .gravity(1.0), // Standard gravity
+            .collision_type(CollisionType::Sphere),
+            2
     );
 
     // Call run to begin simulation!

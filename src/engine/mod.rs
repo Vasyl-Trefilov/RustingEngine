@@ -1,12 +1,12 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use vulkano::sync::GpuFuture;
 use winit::event::{Event, MouseButton, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::run_return::EventLoopExtRunReturn;
 use winit::window::CursorGrabMode;
-use std::collections::HashMap;
-use vulkano::sync::GpuFuture;
 
 use crate::core::{Material, Physics, Transform};
 use crate::geometry::shapes::{create_cube, create_sphere_subdivided};
@@ -19,7 +19,9 @@ use crate::rendering::shader_registry::{ShaderRegistry, ShaderType};
 use crate::rendering::swapchain::{create_framebuffers, create_render_pass};
 use crate::rendering::VulkanBase;
 use crate::scene::object::Instance;
-use crate::scene::{begin_render_pass_only, record_compute_physics_multi, ComputeDispatchInfo, RenderScene};
+use crate::scene::{
+    begin_render_pass_only, record_compute_physics_multi, ComputeDispatchInfo, RenderScene,
+};
 
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
@@ -72,7 +74,7 @@ impl PerspectiveCamera {
         let view_forward = [yaw_cos * pitch_cos, pitch_sin, yaw_sin * pitch_cos];
 
         if mouse_captured {
-            let speed = 0.1 * sprint; 
+            let speed = 0.1 * sprint;
             if keys.contains(&VirtualKeyCode::W) {
                 for i in 0..3 {
                     self.position[i] += forward[i] * speed;
@@ -113,7 +115,7 @@ impl PerspectiveCamera {
 
 /// High-level engine structure for building and rendering scenes.
 ///
-/// Handles Vulkan context, swapchain, render pass, rendering pipeline, inputs, 
+/// Handles Vulkan context, swapchain, render pass, rendering pipeline, inputs,
 /// and the physics simulation loop.
 pub struct Engine {
     pub camera: Arc<Mutex<PerspectiveCamera>>,
@@ -214,7 +216,7 @@ impl Engine {
     }
 
     /// Adding a cube to the scene.
-    /// 
+    ///
     /// # Example
     /// ```
     /// engine.add_cube(
@@ -236,24 +238,19 @@ impl Engine {
             self.cached_cube_mesh = Some(m.clone());
             m
         };
-        
+
         let inst = Instance {
             model_matrix: transform.to_matrix(),
             color: mat.color,
-            velocity: phys.velocity,
-            mass: phys.mass,
-            collision: phys.collision.sort_key(),
-            gravity: phys.gravity,
+            physics: *phys,
             shader: mat.shader,
-            compute_shader: phys.compute_shader,
-            // rotation: [0.2, 0.2, 0.2, 0.0],
             ..Default::default()
         };
         self.scene.lock().unwrap().add_instance(mesh, inst);
     }
 
     /// Adding a sphere to the scene.
-    /// 
+    ///
     /// # Example
     /// ```
     /// engine.add_sphere(
@@ -266,25 +263,28 @@ impl Engine {
     ///        .collision(0.8), // type, if collision < 0.5 => Box, collision > 0.5 => Sphere
     ///    );
     /// ```
-    pub fn add_sphere(&mut self, transform: Transform, mat: &Material, phys: &Physics) {
+    pub fn add_sphere(
+        &mut self,
+        transform: Transform,
+        mat: &Material,
+        phys: &Physics,
+        subdiv: u32,
+    ) {
         // Cache mesh on first use, then reuse
         let mesh = if let Some(cached) = &self.cached_sphere_mesh {
             cached.clone()
         } else {
-            let m = crate::geometry::shapes::create_sphere_subdivided(&self.memory_allocator, 3);
+            let m =
+                crate::geometry::shapes::create_sphere_subdivided(&self.memory_allocator, subdiv);
             self.cached_sphere_mesh = Some(m.clone());
             m
         };
-        
+
         let inst = Instance {
             model_matrix: transform.to_matrix(),
             color: mat.color,
-            velocity: phys.velocity,
-            mass: phys.mass,
-            collision: phys.collision.sort_key(),
-            gravity: phys.gravity,
+            physics: *phys,
             shader: mat.shader,
-            compute_shader: phys.compute_shader,
             ..Default::default()
         };
         self.scene.lock().unwrap().add_instance(mesh, inst);
@@ -315,9 +315,10 @@ impl Engine {
     /// This method will block the current thread until the window is closed.
     /// It handles event dispatch, physics update intervals, and issues continuous draw calls.
     pub fn run(mut self) {
+        eprintln!("[DBG] run() start");
         let mut previous_frame_end: Option<Box<dyn GpuFuture>> =
             Some(sync::now(self.base.device.clone()).boxed());
-        let effective_compute_type = self.compute_registry.scene_shader();
+        eprintln!("[DBG] starting upload");
         let (physics_read, physics_write, mut solid_obj_count, dispatches) = {
             let mut s = self.scene.lock().unwrap();
             let d = s.upload_to_gpu(
@@ -325,9 +326,9 @@ impl Engine {
                 &self.base.queue,
                 &self.compute_registry,
             );
+            eprintln!("[DBG] upload done {}", d.len());
             let tex_count = s.texture_views.len();
             s.ensure_descriptor_cache(self.registry.default_pipeline(), tex_count);
-
             (
                 s.physics_read.clone(),
                 s.physics_write.clone(),
@@ -335,10 +336,9 @@ impl Engine {
                 d,
             )
         };
+        eprintln!("[DBG] creating compute_sets");
 
-        //
-        // Build descriptor sets per compute shader
-        //
+        
         let mut compute_sets: HashMap<
             ComputeShaderType,
             (Arc<PersistentDescriptorSet>, Arc<PersistentDescriptorSet>),
@@ -361,28 +361,91 @@ impl Engine {
                 .set_layouts()[0]
                 .clone();
 
+            let bindings = shader.needs_bindings();
+            let scene = self.scene.lock().unwrap();
+
+            let mut writes_0: Vec<WriteDescriptorSet> = vec![];
+            let mut writes_1: Vec<WriteDescriptorSet> = vec![];
+
+            if bindings.needs_read_buffer {
+                writes_0.push(WriteDescriptorSet::buffer(0, physics_read.clone()));
+                writes_1.push(WriteDescriptorSet::buffer(0, physics_write.clone()));
+            }
+            if bindings.needs_write_buffer {
+                writes_0.push(WriteDescriptorSet::buffer(1, physics_write.clone()));
+                writes_1.push(WriteDescriptorSet::buffer(1, physics_read.clone()));
+            }
+            if bindings.needs_grid_counts {
+                writes_0.push(WriteDescriptorSet::buffer(2, scene.grid_counts.clone()));
+                writes_1.push(WriteDescriptorSet::buffer(2, scene.grid_counts.clone()));
+            }
+            if bindings.needs_grid_objects {
+                writes_0.push(WriteDescriptorSet::buffer(3, scene.grid_objects.clone()));
+                writes_1.push(WriteDescriptorSet::buffer(3, scene.grid_objects.clone()));
+            }
+            if bindings.needs_big_indices {
+                writes_0.push(WriteDescriptorSet::buffer(
+                    4,
+                    scene.big_objects_indices.clone(),
+                ));
+                writes_1.push(WriteDescriptorSet::buffer(
+                    4,
+                    scene.big_objects_indices.clone(),
+                ));
+            }
+
             let set_0 = PersistentDescriptorSet::new(
                 &self.descriptor_set_allocator,
                 compute_layout.clone(),
-                [
-                    WriteDescriptorSet::buffer(0, physics_read.clone()),
-                    WriteDescriptorSet::buffer(1, physics_write.clone()),
-                ],
+                writes_0,
             )
             .unwrap();
 
             let set_1 = PersistentDescriptorSet::new(
                 &self.descriptor_set_allocator,
                 compute_layout.clone(),
-                [
-                    WriteDescriptorSet::buffer(0, physics_write.clone()),
-                    WriteDescriptorSet::buffer(1, physics_read.clone()),
-                ],
+                writes_1,
             )
             .unwrap();
 
             compute_sets.insert(shader, (set_0, set_1));
         }
+        eprintln!("[DBG] compute_sets done");
+
+        let grid_build_sets = {
+            let scene = self.scene.lock().unwrap();
+            let grid_layout = self
+                .compute_registry
+                .get_pipeline(ComputeShaderType::GridBuild)
+                .layout()
+                .set_layouts()[0]
+                .clone();
+
+            let gb_set_0 = PersistentDescriptorSet::new(
+                &self.descriptor_set_allocator,
+                grid_layout.clone(),
+                [
+                    WriteDescriptorSet::buffer(0, physics_read.clone()),
+                    WriteDescriptorSet::buffer(2, scene.grid_counts.clone()),
+                    WriteDescriptorSet::buffer(3, scene.grid_objects.clone()),
+                ],
+            )
+            .unwrap();
+
+            let gb_set_1 = PersistentDescriptorSet::new(
+                &self.descriptor_set_allocator,
+                grid_layout,
+                [
+                    WriteDescriptorSet::buffer(0, physics_write.clone()),
+                    WriteDescriptorSet::buffer(2, scene.grid_counts.clone()),
+                    WriteDescriptorSet::buffer(3, scene.grid_objects.clone()),
+                ],
+            )
+            .unwrap();
+
+            (gb_set_0, gb_set_1)
+        };
+        eprintln!("[DBG] grid_build_sets done, starting event loop");
 
         let mut framebuffers =
             create_framebuffers(&self.images, &self.render_pass, &self.memory_allocator);
@@ -393,10 +456,6 @@ impl Engine {
         let mut compute_ping_pong = false;
         let mut recreate_swapchain = false;
         let mut frame_index = 0;
-
-        // let start_time = Instant::now();
-        // let mut fps_timer = Instant::now();
-        // let mut frame_count = 0u32;
 
         let mut event_loop = self.event_loop.take().unwrap();
         event_loop.run_return(move |event, _, control_flow| {
@@ -517,32 +576,32 @@ impl Engine {
                         (proj, view, cam_pos)
                     };
 
-                    let physics_idx = {
+                    {
                         let mut s = self.scene.lock().unwrap();
                         s.prepare_frame_ubo(frame_index, view, proj, cam_pos);
                         solid_obj_count = s.total_instances;
                         let tex_count = s.texture_views.len();
                         s.ensure_descriptor_cache(self.registry.default_pipeline(), tex_count);
-                        if compute_ping_pong {
-                            0
-                        } else {
-                            1
-                        }
-                    };
+                    }
 
                     let mut comp_builder =
                         create_builder(&self.command_buffer_allocator, &self.base.queue);
-
                     let mut physics_ran = false;
 
                     while accumulator >= fixed_dt {
+                        let scene = self.scene.lock().unwrap();
+                        let cell_size = scene.max_object_radius * 2.0 + 0.2;
                         record_compute_physics_multi(
                             &mut comp_builder,
                             &self.compute_registry,
                             &compute_sets,
+                            &grid_build_sets,
+                            &scene.grid_counts,
                             &dispatches,
                             fixed_dt,
                             solid_obj_count,
+                            cell_size,
+                            scene.num_big_objects,
                             compute_ping_pong,
                         );
 
@@ -550,6 +609,8 @@ impl Engine {
                         accumulator -= fixed_dt;
                         physics_ran = true;
                     }
+
+                    let physics_idx = if compute_ping_pong { 1 } else { 0 };
 
                     if physics_ran {
                         let comp_cb = comp_builder.build().unwrap();
@@ -599,7 +660,6 @@ impl Engine {
 
                     match future {
                         Ok(_) => {
-
                             previous_frame_end = Some(sync::now(self.base.device.clone()).boxed());
                         }
                         Err(FlushError::OutOfDate) => {
@@ -616,7 +676,6 @@ impl Engine {
             }
         });
     }
-    
 }
 
 #[derive(Default)]

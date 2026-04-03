@@ -1,0 +1,30 @@
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+struct InstanceData {
+    mat4 model;     
+    vec4 color;
+    vec4 mat_props;
+    vec4 velocity;  
+    vec4 physic;    
+    vec4 rotation;  
+};
+
+layout(set = 0, binding = 0) readonly buffer ReadBuf  { InstanceData data[]; } read_buf;
+layout(set = 0, binding = 1) writeonly buffer WriteBuf { InstanceData data[]; } write_buf;
+
+layout(push_constant) uniform PushConstants {
+    float dt;           
+    uint  total_objects;
+    uint  offset;
+    uint  count;
+    uint  num_big_objects;
+    vec4  global_gravity;
+} pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x + pc.offset;
+    if (i >= pc.offset + pc.count) return;
+
+    write_buf.data[i] = read_buf.data[i];
+}

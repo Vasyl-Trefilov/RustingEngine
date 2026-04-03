@@ -1,83 +1,271 @@
 #version 450
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
+const uint  HASH_SIZE    = 65521;
+const uint  MAX_PER_CELL = 128;
+
 struct InstanceData {
-	mat4 model; // [3].xyz = position, [0..2] = rotation 0=x, 1=y, 2=z
-	vec4 color; // color.rgb
-	vec4 mat_props; // x is metallic, y is roughness, z is ambient occlusion, w is unused
-	vec4 velocity; // x, y, z is velocity. w is collision radius
-	vec4 physic;  // x is collision type ( type, if < 0.5 => Box, > 0.5 => Sphere), y is mass, z is gravity power, w is unused
-	vec4 rotation; // rotate speed
+    mat4 model;     
+    vec4 color;
+    vec4 mat_props;
+    vec4 velocity;          
+    vec4 angular_velocity;  
+    vec4 physic_props;      
 };
 
-layout(set = 0, binding = 0) buffer ReadBuf {
-	InstanceData data[];
-} read_buf;
-
-layout(set = 0, binding = 1) buffer WriteBuf {
-	InstanceData data[];
-} write_buf;
+layout(set = 0, binding = 0) readonly buffer ReadBuf  { InstanceData data[]; } read_buf;
+layout(set = 0, binding = 1) writeonly buffer WriteBuf { InstanceData data[]; } write_buf;
+layout(set = 0, binding = 2) buffer GridCounts        { uint data[]; } grid_counts;
+layout(set = 0, binding = 3) buffer GridObjects       { uint data[]; } grid_objects;
+layout(set = 0, binding = 4) readonly buffer BigIndices { uint data[]; } big_indices;
 
 layout(push_constant) uniform PushConstants {
-	float dt;
-	uint total_objects;
-	uint offset;
-	uint count;
+    float dt;           
+    uint  total_objects;
+    uint  offset;
+    uint  count;
+    uint  num_big_objects; 
+    vec4  global_gravity; 
 } pc;
 
 mat3 skew(vec3 v) {
     return mat3(
-        0.0, v.z, -v.y,
-        -v.z, 0.0, v.x,
-        v.y, -v.x, 0.0
+        0.0,  v.z, -v.y,
+       -v.z,  0.0,  v.x,
+        v.y, -v.x,  0.0
     );
 }
+
+uint hashCell(ivec3 c) {
+    uvec3 u = uvec3(c);
+    return (u.x * 2654435761u ^ u.y * 2246822519u ^ u.z * 3266489917u) % HASH_SIZE;
+}
+
 void main() {
-	uint i = gl_GlobalInvocationID.x + pc.offset;
-	if (i >= pc.offset + pc.count) return;
+    uint i = gl_GlobalInvocationID.x + pc.offset;
+    if (i >= pc.offset + pc.count) return;
 
-	write_buf.data[i].model[3].y += 0.0;
+    InstanceData me = read_buf.data[i];
+    float mass = me.physic_props.y;
+    if (mass <= 0.0) {
+        write_buf.data[i] = me;
+        return;
+    }
 
-	InstanceData me = read_buf.data[i];
-	if (me.physic.y <= 0.0) {
-		write_buf.data[i] = me;
-		return;
-	}
+    vec3 pos = me.model[3].xyz;
+    vec3 old_pos = pos; 
+    vec3 vel = me.velocity.xyz;
+    vec3 ang_vel = me.angular_velocity.xyz;
+    float type = me.physic_props.x; 
+    float dt = pc.dt;
 
-    vec3 scale = vec3(
-        length(me.model[0].xyz),
-        length(me.model[1].xyz),
-        length(me.model[2].xyz)
-    );
-    
-    float bound_y = (me.physic.x > 0.5) ? scale.x : (scale.y * 0.5);
+    vec3 scaleA = vec3(length(me.model[0].xyz), length(me.model[1].xyz), length(me.model[2].xyz));
+    vec3 halfA = scaleA * 0.5; 
+    mat3 rotA = mat3(me.model[0].xyz / scaleA.x, me.model[1].xyz / scaleA.y, me.model[2].xyz / scaleA.z);
 
-    mat3 rotA = mat3(
-        me.model[0].xyz / scale.x,
-        me.model[1].xyz / scale.y,
-        me.model[2].xyz / scale.z
-    );
-    
-    if( length(me.rotation.xyz) > 0.001 ) {
-        rotA += (skew(me.rotation.xyz) * rotA) * pc.dt;
-        
+    vel += pc.global_gravity.xyz * me.physic_props.z * dt;
+    pos += vel * dt;
+
+    if (length(ang_vel) > 0.001) {
+        rotA += skew(ang_vel) * rotA * dt;
         vec3 c0 = normalize(rotA[0]);
         vec3 c1 = normalize(rotA[1] - dot(c0, rotA[1]) * c0);
         vec3 c2 = cross(c0, c1);
         rotA = mat3(c0, c1, c2);
     }
 
-    me.model[0] = vec4(rotA[0] * scale.x, 0.0);
-    me.model[1] = vec4(rotA[1] * scale.y, 0.0);
-    me.model[2] = vec4(rotA[2] * scale.z, 0.0);
+    float boundA = (type > 0.5) ? scaleA.x : length(halfA);
 
-    me.velocity.y -= 9.81 * me.physic.z * pc.dt; 
-    me.model[3].xyz += me.velocity.xyz * pc.dt;
-    
-    if(me.model[3].y - bound_y < 0.0){
-        me.model[3].y = bound_y;
-        me.velocity.y *= -0.5;
+    #define SOLVE_COLLISION(j) { \
+        InstanceData other = read_buf.data[j]; \
+        vec3 o_pos = other.model[3].xyz; \
+        vec3 delta = o_pos - pos; \
+        \
+        vec3 o_scale = vec3(length(other.model[0].xyz), length(other.model[1].xyz), length(other.model[2].xyz)); \
+        vec3 halfB = o_scale * 0.5; \
+        float o_type = other.physic_props.x; \
+        \
+        float boundB = (o_type > 0.5) ? o_scale.x : length(halfB); \
+        if (dot(delta, delta) <= pow(boundA + boundB, 2.0)) { \
+            mat3 rotB = mat3(other.model[0].xyz / o_scale.x, other.model[1].xyz / o_scale.y, other.model[2].xyz / o_scale.z); \
+            vec3 normal = vec3(0.0); \
+            float overlap = 0.0; \
+            vec3 world_contact = vec3(0.0); \
+            \
+            /* Sphere - Sphere */ \
+            if (type > 0.5 && o_type > 0.5) { \
+                float d = length(delta); \
+                float sum_r = scaleA.x + o_scale.x; \
+                if (d < sum_r) { \
+                    normal = -delta / max(d, 0.0001); \
+                    overlap = sum_r - d; \
+                    world_contact = pos - normal * scaleA.x; \
+                } \
+            } \
+            /* Box - Box */ \
+            else if (type < 0.5 && o_type < 0.5) { \
+                float min_overlap = 1e9; \
+                vec3 best_axis; \
+                bool separating = false; \
+                vec3 axes[15]; \
+                axes[0] = rotA[0]; axes[1] = rotA[1]; axes[2] = rotA[2]; \
+                axes[3] = rotB[0]; axes[4] = rotB[1]; axes[5] = rotB[2]; \
+                axes[6] = cross(rotA[0], rotB[0]); axes[7] = cross(rotA[0], rotB[1]); axes[8] = cross(rotA[0], rotB[2]); \
+                axes[9] = cross(rotA[1], rotB[0]); axes[10] = cross(rotA[1], rotB[1]); axes[11] = cross(rotA[1], rotB[2]); \
+                axes[12] = cross(rotA[2], rotB[0]); axes[13] = cross(rotA[2], rotB[1]); axes[14] = cross(rotA[2], rotB[2]); \
+                \
+                for (int a = 0; a < 15; a++) { \
+                    vec3 L = axes[a]; \
+                    float lenSq = dot(L, L); \
+                    if (lenSq < 1e-6) continue; \
+                    L *= inversesqrt(lenSq); \
+                    float rA = halfA.x * abs(dot(rotA[0], L)) + halfA.y * abs(dot(rotA[1], L)) + halfA.z * abs(dot(rotA[2], L)); \
+                    float rB = halfB.x * abs(dot(rotB[0], L)) + halfB.y * abs(dot(rotB[1], L)) + halfB.z * abs(dot(rotB[2], L)); \
+                    float s = rA + rB - abs(dot(delta, L)); \
+                    if (s <= 0.0) { separating = true; break; } \
+                    if (s < min_overlap) { min_overlap = s; best_axis = L; } \
+                } \
+                if (!separating) { \
+                    overlap = min_overlap; \
+                    normal = (dot(delta, best_axis) > 0.0) ? -best_axis : best_axis; \
+                    vec3 local_n = transpose(rotA) * (-normal); \
+                    if (abs(local_n.x) > 0.98) world_contact = pos + rotA[0] * (local_n.x * halfA.x); \
+                    else if (abs(local_n.y) > 0.98) world_contact = pos + rotA[1] * (local_n.y * halfA.y); \
+                    else if (abs(local_n.z) > 0.98) world_contact = pos + rotA[2] * (local_n.z * halfA.z); \
+                    else { \
+                        vec3 c_local = vec3( \
+                            (local_n.x > 0.0) ? halfA.x : -halfA.x, \
+                            (local_n.y > 0.0) ? halfA.y : -halfA.y, \
+                            (local_n.z > 0.0) ? halfA.z : -halfA.z \
+                        ); \
+                        world_contact = pos + rotA * c_local; \
+                    } \
+                } \
+            } \
+            /* Box - Sphere */ \
+            else { \
+                bool i_is_box = (type < 0.5); \
+                vec3 b_pos = i_is_box ? pos : o_pos; \
+                vec3 s_pos = i_is_box ? o_pos : pos; \
+                mat3 b_rot = i_is_box ? rotA : rotB; \
+                vec3 b_half = i_is_box ? halfA : halfB; \
+                float s_rad = i_is_box ? o_scale.x : scaleA.x; \
+                vec3 local_s = transpose(b_rot) * (s_pos - b_pos); \
+                vec3 closest = clamp(local_s, -b_half, b_half); \
+                vec3 local_delta = local_s - closest; \
+                float d = length(local_delta); \
+                if (d < s_rad && d > 0.0001) { \
+                    overlap = s_rad - d; \
+                    normal = b_rot * (local_delta / d); \
+                    if (i_is_box) normal = -normal; \
+                    world_contact = b_rot * closest + b_pos; \
+                } \
+            } \
+            \
+            if (overlap > 0.0) { \
+                float o_mass = max(other.physic_props.y, 0.001); \
+                float my_m = mass; \
+                float ot_m = o_mass; \
+                \
+                /* If I am on top of the other object, make the other object essentially unmovable */ \
+                if (pos.y > o_pos.y + 0.1) { ot_m *= 10.0; } \
+                else if (o_pos.y > pos.y + 0.1) { my_m *= 10.0; } \
+                \
+                float total_m = my_m + ot_m; \
+                float ratio = ot_m / total_m; \
+                pos += normal * overlap * ratio * 0.95; \
+                \
+                /* Impulse Math */ \
+                vec3 r_me = world_contact - pos; \
+                vec3 r_ot = world_contact - o_pos; \
+                float inertia = (type < 0.5) ? mass * dot(scaleA, scaleA) / 6.0 : 0.4 * mass * scaleA.x * scaleA.x; \
+                float o_inertia = (o_type < 0.5) ? o_mass * dot(o_scale, o_scale) / 6.0 : 0.4 * o_mass * o_scale.x * o_scale.x; \
+                \
+                vec3 v_rel = (vel + cross(ang_vel, r_me)) - (other.velocity.xyz + cross(other.angular_velocity.xyz, r_ot)); \
+                float v_sep = dot(v_rel, normal); \
+                \
+                if (v_sep < 0.0) { \
+                    float K = (1.0/mass + 1.0/o_mass) + dot(normal, cross(cross(r_me, normal)/inertia, r_me)) + dot(normal, cross(cross(r_ot, normal)/o_inertia, r_ot)); \
+                    float bounciness = 1.0 + ((me.velocity.w + other.velocity.w) * 0.5); \
+                    if (bounciness < 1.0) bounciness = 1.1; /* Fallback to old hardcode */ \
+                    \
+                    float j = -(bounciness * v_sep) / K; \
+                    vec3 impulse = j * normal; \
+                    vel += impulse / mass; \
+                    \
+                    /* Only add rotation if we aren't hitting the face center or if movement is fast */ \
+                    if (overlap > 0.01 || abs(v_sep) > 0.1) { \
+                         ang_vel += cross(r_me, impulse) / inertia; \
+                    } \
+                    \
+                    /* Friction */ \
+                    v_rel = (vel + cross(ang_vel, r_me)) - (other.velocity.xyz + cross(other.angular_velocity.xyz, r_ot)); \
+                    vec3 tangent = v_rel - dot(v_rel, normal) * normal; \
+                    if (length(tangent) > 0.01) { \
+                        vec3 t_dir = normalize(tangent); \
+                        float Kt = (1.0/mass + 1.0/o_mass) + dot(t_dir, cross(cross(r_me, t_dir)/inertia, r_me)) + dot(t_dir, cross(cross(r_ot, t_dir)/o_inertia, r_ot)); \
+                        float jt = clamp(-dot(v_rel, t_dir) / Kt, -j * 0.5, j * 0.5); \
+                        vec3 f_imp = jt * t_dir; \
+                        vel += f_imp / mass; \
+                        ang_vel += cross(r_me, f_imp) / inertia; \
+                    } \
+                } \
+            } \
+        } \
     }
 
-    write_buf.data[i] = me;
+    ivec3 cell = ivec3(floor(old_pos / pc.global_gravity.w));
+    uint h = hashCell(cell);
+    write_buf.data[i].physic_props.w = float(grid_counts.data[h]);
+    
+    for (int dz = -1; dz <= 1; dz++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                uint curr_h = hashCell(cell + ivec3(dx, dy, dz));
+                uint grid_c = min(grid_counts.data[curr_h], MAX_PER_CELL);
+                for (uint s = 0; s < grid_c; s++) {
+                    uint j = grid_objects.data[curr_h * MAX_PER_CELL + s];
+                    if (j == i || j >= pc.total_objects) continue;
+                    SOLVE_COLLISION(j);
+                }
+            }
+        }
+    }
+
+    for (uint k = 0; k < pc.num_big_objects; k++) {
+        uint j = big_indices.data[k];
+        if (i == j || j >= pc.total_objects) continue;
+        SOLVE_COLLISION(j);
+    }
+
+    float lowest_y = (type > 0.5) ? scaleA.x : (halfA.x * abs(rotA[0].y) + halfA.y * abs(rotA[1].y) + halfA.z * abs(rotA[2].y));
+    if (pos.y < lowest_y) {
+        pos.y = lowest_y;
+        if (vel.y < 0.0) {
+            vel.y *= -0.05; 
+            vel.xz *= 0.8;
+            ang_vel *= 0.7;
+            
+            if (type < 0.5 && rotA[1].y < 0.99) {
+                vec3 local_down = transpose(rotA) * vec3(0, -1, 0);
+                vec3 edge = rotA * vec3((local_down.x > 0.0) ? halfA.x : -halfA.x, (local_down.y > 0.0) ? halfA.y : -halfA.y, (local_down.z > 0.0) ? halfA.z : -halfA.z);
+                ang_vel += cross(edge, vec3(0, 1, 0)) * 2.0 * dt;
+            }
+        }
+    }
+    
+    if (length(vel) < 0.02 && length(ang_vel) < 0.02) {
+        vel = vec3(0,0,0);
+        ang_vel = vec3(0,0,0);
+    }
+
+    write_buf.data[i].model[0] = vec4(rotA[0] * scaleA.x, 0.0);
+    write_buf.data[i].model[1] = vec4(rotA[1] * scaleA.y, 0.0);
+    write_buf.data[i].model[2] = vec4(rotA[2] * scaleA.z, 0.0);
+    write_buf.data[i].model[3] = vec4(pos, 1.0);
+    write_buf.data[i].velocity = vec4(vel, me.velocity.w);
+    write_buf.data[i].angular_velocity = vec4(ang_vel, me.angular_velocity.w);
+    write_buf.data[i].color = me.color;
+    write_buf.data[i].mat_props = me.mat_props;
+    write_buf.data[i].physic_props = me.physic_props;
 }

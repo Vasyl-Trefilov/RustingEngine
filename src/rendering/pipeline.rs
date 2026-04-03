@@ -79,6 +79,7 @@ use vulkano::pipeline::graphics::viewport::ViewportState;
 use vulkano::render_pass::RenderPass;
 use vulkano::render_pass::Subpass;
 use vulkano::shader::ShaderModule;
+use vulkano::pipeline::graphics::rasterization::FrontFace;
 
 pub fn create_pipeline(
     vs: Arc<ShaderModule>,
@@ -91,8 +92,8 @@ pub fn create_pipeline(
         .vertex_shader(vs.entry_point("main").unwrap(), ())
         .input_assembly_state(InputAssemblyState::new().topology(PrimitiveTopology::TriangleList))
         .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-        // .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
-        .rasterization_state(RasterizationState::new().cull_mode(CullMode::None)) // with this think you can like disable normals to see the back of objects
+        // .rasterization_state(RasterizationState::new().cull_mode(CullMode::None)) // with this think you can like disable normals to see the back of objects
+        .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back).front_face(FrontFace::Clockwise)) 
         .fragment_shader(fs.entry_point("main").unwrap(), ())
         .depth_stencil_state(DepthStencilState::simple_depth_test())
         .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())

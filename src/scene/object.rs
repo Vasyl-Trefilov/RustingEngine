@@ -1,7 +1,7 @@
-use crate::geometry::Mesh;
 use crate::rendering::compute_registry::ComputeShaderType;
 use crate::rendering::shader_registry::ShaderType;
 use crate::scene::animation::AnimationType;
+use crate::{geometry::Mesh, Physics};
 use nalgebra::{Matrix4, Rotation3, Vector3};
 use std::sync::Arc;
 use vulkano::image::{view::ImageView, ImageAccess};
@@ -9,14 +9,13 @@ use vulkano::image::{view::ImageView, ImageAccess};
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct InstanceData {
-    pub model: [[f32; 4]; 4], // 64 bytes
-    pub color: [f32; 4],      // 16 bytes, color + emission
-    pub mat_props: [f32; 4],  // 16 bytes
-    pub velocity: [f32; 4],   // 16 bytes
-    pub physic: [f32; 4],     // 16 bytes
-    pub rotation: [f32; 4],   // 16 bytes
-                              // Total 144 bytes
-}
+    pub model: [[f32; 4]; 4], // 64b. [3].xyz = position, [0..2] = rotate/scale
+    pub color: [f32; 4],      // 16b. rgb + emissive
+    pub mat_props: [f32; 4],  // 16b. x=roughness, y=metalness, z,w=custom
+    pub velocity: [f32; 4],   // 16b. xyz = linear speed, w = (Bounciness/Restitution)
+    pub angular_velocity: [f32; 4], // 16b. xyz = angle speed, w = Friction
+    pub physic_props: [f32; 4], // 16b. x = shape(0=Box,1=Sphere), y = mass, z = gravity_scale, w = grid_hack
+} // Total: 144 bytes, if you want you want to copy my library and rewrite it, remember always to keep `total mod 16 = 0` or GPU will work bad
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -25,6 +24,9 @@ pub struct PhysicsPushConstants {
     pub total_objects: u32,
     pub offset: u32,
     pub count: u32,
+    pub num_big_objects: u32,
+    pub _pad: [u32; 3],           // padding to reach offset 32 (vec4 alignment)
+    pub global_gravity: [f32; 4], // xyz = global gravity vector, w = (CELL_SIZE) [-9.81, 0.0, 0.0, ]
 }
 
 #[derive(Clone)]
@@ -37,20 +39,14 @@ pub struct Instance {
     pub metallic_roughness_texture: Option<usize>,
     pub animation: AnimationType,
     pub model_matrix: [[f32; 4]; 4],
-    pub velocity: [f32; 4],
-    pub mass: f32,
-    pub collision: f32,
-    pub gravity: f32,
-    pub rotation: [f32; 4],
+    pub physics: Physics,
     pub shader: ShaderType,
-    pub compute_shader: ComputeShaderType,
 }
 
 impl Default for Instance {
     fn default() -> Self {
         Self {
             animation: AnimationType::Static,
-            velocity: [0.0, 0.0, 0.0, 1.0],
             model_matrix: [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
@@ -63,12 +59,8 @@ impl Default for Instance {
             metallic_roughness_texture: None,
             roughness: 0.5,
             metalness: 0.5,
-            mass: 1.0,
-            collision: 0.0,
-            gravity: 1.0,
-            rotation: [0.0, 0.0, 0.0, 0.0],
+            physics: Physics::default(),
             shader: ShaderType::Pbr,
-            compute_shader: ComputeShaderType::FullPhysics,
         }
     }
 }
