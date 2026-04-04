@@ -1,6 +1,16 @@
 # Changelog
 
-## [0.1.2] - 2026-04-3
+## [0.1.31] - 2026-04-4
+
+### Added
+
+- Just made code cleaner and only fixed some problems in shaders
+
+### Fixed
+
+- Grid collision shader
+
+## [0.1.3] - 2026-04-3
 
 ### Added
 

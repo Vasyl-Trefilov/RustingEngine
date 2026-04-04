@@ -46,7 +46,7 @@ pub struct PerspectiveCamera {
 impl PerspectiveCamera {
     pub fn new(fov: f32, aspect: f32, near: f32, far: f32) -> Self {
         Self {
-            position: [0.0, 5.0, 20.0],
+            position: [0.0, 50.0, 200.0],
             yaw: 90.0f32.to_radians(),
             pitch: 0.0,
             fov: fov.to_radians(),
@@ -182,7 +182,7 @@ impl Engine {
             registry.default_pipeline(),
             &base.queue,
             3,
-            1_000_00, // 1m
+            1_000_000, // 1m
         );
 
         let compute_registry = ComputeShaderRegistry::new(&base.device);

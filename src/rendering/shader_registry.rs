@@ -7,7 +7,7 @@ use vulkano::render_pass::RenderPass;
 use vulkano::shader::ShaderModule;
 
 use crate::rendering::pipeline::create_pipeline;
-use crate::shaders::{fs, fs_emissive, fs_normal_debug, fs_unlit, vs};
+use crate::shaders::{fragment::*, vertex::vs};
 
 /// Fragment shader variant that a user can assign to an object or scene.
 /// Determines which fragment shader is used during rendering.

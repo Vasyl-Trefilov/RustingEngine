@@ -4,7 +4,7 @@ use std::sync::Arc;
 use vulkano::device::Device;
 use vulkano::pipeline::ComputePipeline;
 
-use crate::shaders::{cs, cs_basic, cs_empty, cs_full};
+use crate::shaders::compute::*;
 
 /// Which descriptor bindings a compute shader needs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -30,10 +30,10 @@ impl ShaderBindings {
     pub fn grid_build() -> Self {
         Self {
             needs_read_buffer: true,
-            needs_write_buffer: false,
+            needs_write_buffer: true,
             needs_grid_counts: true,
             needs_grid_objects: true,
-            needs_big_indices: false,
+            needs_big_indices: true,
         }
     }
 }
@@ -55,7 +55,7 @@ pub enum ComputeShaderType {
     GridBuild,
     /// useless shader that has no effect on anything. You can use it to test for fast render without compute shader or I dont know
     Empty,
-
+    /// This is testing not stable shaders
     Test,
 }
 
@@ -75,6 +75,7 @@ impl ComputeShaderType {
     pub fn needs_bindings(&self) -> ShaderBindings {
         match self {
             ComputeShaderType::GridBuild => ShaderBindings::grid_build(),
+            ComputeShaderType::Test => ShaderBindings::grid_build(),
             _ => ShaderBindings::basic(),
         }
     }
@@ -103,7 +104,7 @@ impl ComputeShaderRegistry {
         pipelines.insert(ComputeShaderType::FullPhysics, cp_full);
 
         // Mid physics
-        let cs_mid = cs::load(device.clone()).expect("Failed to load MidPhysics compute shader");
+        let cs_mid = cs_no_rot::load(device.clone()).expect("Failed to load MidPhysics compute shader");
         let cp_mid = ComputePipeline::new(
             device.clone(),
             cs_mid.entry_point("main").unwrap(),
@@ -127,7 +128,7 @@ impl ComputeShaderRegistry {
         pipelines.insert(ComputeShaderType::Static, cp_static);
 
         // NoCollision (gravity and velocity, but no collision loop)
-        let cs_no_col = crate::shaders::cs2::load(device.clone())
+        let cs_no_col = cs_no_coll::load(device.clone())
             .expect("Failed to load NoCollision compute shader");
         let cp_no_col = ComputePipeline::new(
             device.clone(),
@@ -139,7 +140,7 @@ impl ComputeShaderRegistry {
         .expect("Failed to create NoCollision pipeline");
         pipelines.insert(ComputeShaderType::NoCollision, cp_no_col);
 
-        let cs_grid = crate::shaders::cs_grid_build::load(device.clone())
+        let cs_grid = cs_grid_build::load(device.clone())
             .expect("Failed to load GridBuild compute shader");
         let cp_grid = ComputePipeline::new(
             device.clone(),
@@ -151,7 +152,7 @@ impl ComputeShaderRegistry {
         .expect("Failed to create GridBuild pipeline");
         pipelines.insert(ComputeShaderType::GridBuild, cp_grid);
 
-        let cs_empty = crate::shaders::cs_empty::load(device.clone())
+        let cs_empty = cs_empty::load(device.clone())
             .expect("Failed to load Empty compute shader");
         let cp_empty = ComputePipeline::new(
             device.clone(),
@@ -163,7 +164,7 @@ impl ComputeShaderRegistry {
         .expect("Failed to create Empty shader pipeline");
         pipelines.insert(ComputeShaderType::Empty, cp_empty);
 
-        let cs_test = cs_full::load(device.clone()).expect("Failed to load Test compute shader");
+        let cs_test = cs_test::load(device.clone()).expect("Failed to load Test compute shader");
         let cp_test = ComputePipeline::new(
             device.clone(),
             cs_test.entry_point("main").unwrap(),

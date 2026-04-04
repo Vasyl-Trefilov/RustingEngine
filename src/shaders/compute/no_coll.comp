@@ -1,0 +1,83 @@
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+struct InstanceData {
+	mat4 model;
+	vec4 color;
+	vec4 mat_props;
+	vec4 velocity;
+	vec4 physic; 
+	vec4 rotation;
+};
+
+layout(set = 0, binding = 0) buffer ReadBuf {
+	InstanceData data[];
+} read_buf;
+
+layout(set = 0, binding = 1) buffer WriteBuf {
+	InstanceData data[];
+} write_buf;
+
+layout(push_constant) uniform PushConstants {
+	float dt;
+	uint total_objects;
+	uint offset;
+	uint count;
+} pc;
+
+mat3 skew(vec3 v) {
+	return mat3(0.0, -v.z, v.y, v.z, 0.0, -v.x, -v.y, v.x, 0.0);
+}
+
+void main() {
+	uint i = gl_GlobalInvocationID.x + pc.offset;
+	if (i >= pc.offset + pc.count) return;
+	
+	write_buf.data[i] = read_buf.data[i];
+	
+	InstanceData me = read_buf.data[i];
+	vec3 pos = me.model[3].xyz;
+	vec3 vel = me.velocity.xyz;
+	vec3 ang_vel = me.rotation.xyz;
+	
+	float radius = me.velocity.w;
+	float type = me.physic.x;
+	float mass = me.physic.y;
+	float bounce = me.physic.z;
+	float grav = me.physic.w;
+
+	if (mass <= 0.0) return;
+
+	vel += vec3(0.0, -9.81 * grav * pc.dt, 0.0);
+
+	// Floor collision
+	float ground_level = 0.5 + radius;
+	if (pos.y < ground_level) {
+		pos.y = ground_level;
+		vel.y = -vel.y * bounce;
+		vel.x *= 0.98;
+		vel.z *= 0.98;
+		ang_vel *= 0.95;
+	}
+
+	pos += vel * pc.dt;
+
+	mat3 rot = mat3(me.model[0].xyz, me.model[1].xyz, me.model[2].xyz);
+	if (length(ang_vel) > 0.001) {
+		rot += skew(ang_vel) * rot * pc.dt;
+		vec3 c0 = normalize(rot[0]);
+		vec3 c1 = normalize(rot[1] - dot(c0, rot[1]) * c0);
+		vec3 c2 = cross(c0, c1);
+		rot = mat3(c0, c1, c2);
+	}
+
+	me.model[0].xyz = rot[0];
+	me.model[1].xyz = rot[1];
+	me.model[2].xyz = rot[2];
+	me.model[3].xyz = pos;
+
+	me.velocity.xyz = vel;
+	me.rotation.xyz = ang_vel;
+
+	write_buf.data[i] = me;
+}

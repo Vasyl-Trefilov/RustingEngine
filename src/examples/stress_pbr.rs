@@ -6,7 +6,7 @@ use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, T
 /// also good example of usage `set_scene_shader` and `set_scene_physic`
 pub fn main() {
     let mut engine = Engine::new("RustingEngine - Stress Test PBR (10k Objects)");
-    engine.set_light([30.0, 50.0, 30.0], [1.0, 1.0, 1.0], 500.0);
+    engine.set_light([300.0, 500.0, 300.0], [1.0, 1.0, 1.0], 50000.0);
     let red_pbr = Material::standard()
         .color([1.0, 0.2, 0.2])
         .shader(ShaderType::Pbr)
@@ -15,11 +15,11 @@ pub fn main() {
         .color([0.2, 1.0, 0.2])
         .shader(ShaderType::Pbr)
         .build();
-    let grid_size = 20; // 20 * 25 * 20 = 10,000 cubes
+    let grid_size = 50; // 20 * 25 * 20 = 10,000 cubes
     
     // Spawn 10,000 interactive physical cubes 
     for x in 0..grid_size {
-        for y in 0..25 {
+        for y in 0..50 {
             for z in 0..grid_size {
                 let pos = [
                     (x as f32 - grid_size as f32 / 2.0) * 1.5,
@@ -91,7 +91,7 @@ pub fn main() {
             2
         );
 
-    engine.set_scene_shader(ShaderType::Unlit);
+    engine.set_scene_shader(ShaderType::Pbr);
     engine.set_scene_physic(ComputeShaderType::Test);
     engine.run();
 }
