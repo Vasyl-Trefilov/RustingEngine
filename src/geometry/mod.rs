@@ -183,6 +183,37 @@ pub mod shapes {
         });
     }
 
+    fn add_triangle_idx(
+        vertices: &mut Vec<VertexPosColorUv>,
+        indices: &mut Vec<u32>,
+        p1: [f32; 3],
+        p2: [f32; 3],
+        p3: [f32; 3],
+    ) {
+        let normal = calculate_normal(p1, p2, p3);
+        let base_idx = vertices.len() as u32;
+
+        vertices.push(VertexPosColorUv {
+            position: p1,
+            normal,
+            uv: [1.0, 1.0],
+        });
+        vertices.push(VertexPosColorUv {
+            position: p2,
+            normal,
+            uv: [1.0, 1.0],
+        });
+        vertices.push(VertexPosColorUv {
+            position: p3,
+            normal,
+            uv: [1.0, 1.0],
+        });
+
+        indices.push(base_idx);
+        indices.push(base_idx + 1);
+        indices.push(base_idx + 2);
+    }
+
     // * Wrong Normal triangle
     fn add_wrong_triangle(
         vertices: &mut Vec<VertexPosColorUv>,
@@ -273,10 +304,9 @@ pub mod shapes {
     }
 
     // * Create a unit cube centered at origin
-    pub fn create_cube(
-        memory_allocator: &Arc<StandardMemoryAllocator>,
-    ) -> Mesh {
+    pub fn create_cube(memory_allocator: &Arc<StandardMemoryAllocator>) -> Mesh {
         let mut vertices: Vec<VertexPosColorUv> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
 
         let v = [
             [-0.5, -0.5, 0.5],
@@ -290,30 +320,30 @@ pub mod shapes {
         ];
 
         // Front face (+Z)
-        add_triangle(&mut vertices, v[0], v[1], v[2]);
-        add_triangle(&mut vertices, v[2], v[3], v[0]);
+        add_triangle_idx(&mut vertices, &mut indices, v[0], v[1], v[2]);
+        add_triangle_idx(&mut vertices, &mut indices, v[2], v[3], v[0]);
 
         // Right face (+X)
-        add_triangle(&mut vertices, v[1], v[5], v[6]);
-        add_triangle(&mut vertices, v[6], v[2], v[1]);
+        add_triangle_idx(&mut vertices, &mut indices, v[1], v[5], v[6]);
+        add_triangle_idx(&mut vertices, &mut indices, v[6], v[2], v[1]);
 
         // Back face (-Z)
-        add_triangle(&mut vertices, v[5], v[4], v[7]);
-        add_triangle(&mut vertices, v[7], v[6], v[5]);
+        add_triangle_idx(&mut vertices, &mut indices, v[5], v[4], v[7]);
+        add_triangle_idx(&mut vertices, &mut indices, v[7], v[6], v[5]);
 
         // Left face (-X)
-        add_triangle(&mut vertices, v[4], v[0], v[3]);
-        add_triangle(&mut vertices, v[3], v[7], v[4]);
+        add_triangle_idx(&mut vertices, &mut indices, v[4], v[0], v[3]);
+        add_triangle_idx(&mut vertices, &mut indices, v[3], v[7], v[4]);
 
         // Top face (+Y)
-        add_triangle(&mut vertices, v[3], v[2], v[6]);
-        add_triangle(&mut vertices, v[6], v[7], v[3]);
+        add_triangle_idx(&mut vertices, &mut indices, v[3], v[2], v[6]);
+        add_triangle_idx(&mut vertices, &mut indices, v[6], v[7], v[3]);
 
         // Bottom face (-Y)
-        add_triangle(&mut vertices, v[4], v[5], v[1]);
-        add_triangle(&mut vertices, v[1], v[0], v[4]);
+        add_triangle_idx(&mut vertices, &mut indices, v[4], v[5], v[1]);
+        add_triangle_idx(&mut vertices, &mut indices, v[1], v[0], v[4]);
 
-        Mesh::new(memory_allocator, &vertices, None)
+        Mesh::new(memory_allocator, &vertices, Some(&indices))
     }
 
     // * Wrong Cube, to test normals
@@ -540,7 +570,8 @@ pub mod shapes {
             });
         }
 
-        Mesh::new(memory_allocator, &final_vertices, None)
+        let mut final_indices: Vec<u32> = (0..final_vertices.len() as u32).collect();
+        Mesh::new(memory_allocator, &final_vertices, Some(&final_indices))
     }
 
     // * Create a tetrahedron

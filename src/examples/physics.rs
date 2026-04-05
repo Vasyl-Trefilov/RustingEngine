@@ -1,7 +1,7 @@
-use rusting_engine::{Engine, Material, Physics, Transform, CollisionType};
+use rusting_engine::{CollisionType, Engine, Material, Physics, Transform};
 
 /// # Physics Gravity & Collision Example
-/// This example demonstrates how hundreds of instanced objects can dynamically interact 
+/// This example demonstrates how hundreds of instanced objects can dynamically interact
 /// via compute shader acceleration without taxing the CPU.
 pub fn main() {
     let mut engine = Engine::new("RustingEngine - Physics Demo");
@@ -16,7 +16,10 @@ pub fn main() {
             for k in 0..10 {
                 let pos = [i as f32 * 1.5, j as f32 * 2.0 + 7.0, k as f32 * 1.5];
                 engine.add_cube(
-                    Transform { position: pos, ..Default::default()},
+                    Transform {
+                        position: pos,
+                        ..Default::default()
+                    },
                     &red,
                     &Physics::default()
                         .collision_type(CollisionType::Box)
@@ -37,7 +40,7 @@ pub fn main() {
         &Physics::default()
             .mass(100000.0) // Very heavy
             .collision_type(CollisionType::Sphere),
-            2
+        2,
     );
 
     // Call run to begin simulation!

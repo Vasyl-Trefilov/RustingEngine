@@ -55,6 +55,8 @@ pub enum ComputeShaderType {
     GridBuild,
     /// useless shader that has no effect on anything. You can use it to test for fast render without compute shader or I dont know
     Empty,
+    /// culling shaders for insane optimization
+    Cull,
     /// This is testing not stable shaders
     Test,
 }
@@ -68,7 +70,8 @@ impl ComputeShaderType {
             ComputeShaderType::NoCollision => 3,
             ComputeShaderType::GridBuild => 4,
             ComputeShaderType::Empty => 5,
-            ComputeShaderType::Test => 6,
+            ComputeShaderType::Cull => 6,
+            ComputeShaderType::Test => 7,
         }
     }
 
@@ -164,6 +167,19 @@ impl ComputeShaderRegistry {
         .expect("Failed to create Empty shader pipeline");
         pipelines.insert(ComputeShaderType::Empty, cp_empty);
 
+        let cs_cull = cs_cull::load(device.clone())
+            .expect("Failed to load Cull compute shader");
+        let cp_cull = ComputePipeline::new(
+            device.clone(),
+            cs_cull.entry_point("main").unwrap(),
+            &(),
+            None,
+            |_| {},
+        )
+        .expect("Failed to create Cull shader pipeline");
+        pipelines.insert(ComputeShaderType::Cull, cp_cull);
+
+
         let cs_test = cs_test::load(device.clone()).expect("Failed to load Test compute shader");
         let cp_test = ComputePipeline::new(
             device.clone(),
@@ -212,4 +228,13 @@ impl ComputeShaderRegistry {
     pub fn scene_shader_optional(&self) -> Option<ComputeShaderType> {
         self.scene_shader
     }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CullPushConstants {
+    pub view_proj: [[f32; 4]; 4],
+    pub batch_offset: u32,         // Index of first instance in the physics buffer
+    pub batch_count: u32,          // How many instances in this batch
+    pub visible_list_offset: u32,  // Where to start writing in the VisibleIndices buffer
 }

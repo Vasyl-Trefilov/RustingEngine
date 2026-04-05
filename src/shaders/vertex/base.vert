@@ -25,14 +25,26 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
 	mat4 view;
 	mat4 proj;
 	vec3 eye_pos;
+	uint v_base_instance;
 } ubo;
 
-		layout(std430, set = 0, binding = 2) readonly buffer InstanceBuffer {
-	InstanceData instances[];
-};
+layout(push_constant) uniform MeshPush {
+    uint v_visible_list_offset;  // 0 for direct rendering, offset for indirect
+    uint v_use_culling;           // 0 = direct rendering, 1 = indirect with culling
+} mesh_pc;
+
+layout(std430, set = 0, binding = 2) readonly buffer InstanceBuffer { InstanceData instances[]; };
+layout(std430, set = 0, binding = 3) readonly buffer VisibleIndices { uint data[]; };
 
 void main() {
-	InstanceData inst = instances[gl_InstanceIndex];
+    uint actual_id;
+    if (mesh_pc.v_use_culling == 1) {
+        actual_id = data[gl_InstanceIndex + mesh_pc.v_visible_list_offset];
+    } else {
+        actual_id = gl_InstanceIndex + mesh_pc.v_visible_list_offset;
+    }
+    InstanceData inst = instances[actual_id];
+
 
 	vec4 world_pos = inst.model * vec4(position, 1.0);
 	gl_Position = ubo.proj * ubo.view * world_pos;

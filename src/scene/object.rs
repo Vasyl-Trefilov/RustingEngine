@@ -4,6 +4,8 @@ use crate::scene::animation::AnimationType;
 use crate::{geometry::Mesh, Physics};
 use nalgebra::{Matrix4, Rotation3, Vector3};
 use std::sync::Arc;
+use vulkano::buffer::Subbuffer;
+use vulkano::command_buffer::{DrawIndexedIndirectCommand, DrawIndirectCommand};
 use vulkano::image::{view::ImageView, ImageAccess};
 
 #[repr(C)]
@@ -166,4 +168,6 @@ pub struct RenderBatch {
     pub instances: Vec<Instance>,
     pub shader: ShaderType,
     pub compute_shader: ComputeShaderType,
+    pub indirect_buffer: Subbuffer<[DrawIndexedIndirectCommand]>,
+    pub base_instance_offset: u32,
 }

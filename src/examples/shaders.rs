@@ -1,11 +1,13 @@
-use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, Transform, CollisionType};
+use rusting_engine::{
+    CollisionType, ComputeShaderType, Engine, Material, Physics, ShaderType, Transform,
+};
 
 /// # Shaders Example
 /// This example demonstrates how to assign various rendering configurations,
-/// such as Unlit or Emissive materials, and static physics objects. 
+/// such as Unlit or Emissive materials, and static physics objects.
 pub fn main() {
     let mut engine = Engine::new("RustingEngine - Shaders Demo");
-    
+
     // Set a global directional light
     engine.set_light([30.0, 30.0, 30.0], [1.0, 0.95, 0.9], 450.0);
 
@@ -32,10 +34,12 @@ pub fn main() {
     engine.add_cube(
         Transform::default(),
         &unlit_mat,
-        &Physics::default().compute_shader(ComputeShaderType::Static).mass(0.0), // Does not move
+        &Physics::default()
+            .compute_shader(ComputeShaderType::Static)
+            .mass(0.0), // Does not move
     );
 
-    // Create a moving, glowing bouncy ball 
+    // Create a moving, glowing bouncy ball
     engine.add_sphere(
         Transform {
             position: [0.0, 15.0, 0.0],
@@ -46,12 +50,15 @@ pub fn main() {
         &Physics::default()
             .mass(100.0)
             .collision_type(CollisionType::Sphere),
-            2
+        2,
     );
 
     // A PBR cube falling
     engine.add_cube(
-        Transform { position: [2.0, 20.0, 2.0], ..Default::default() },
+        Transform {
+            position: [2.0, 20.0, 2.0],
+            ..Default::default()
+        },
         &pbr_mat,
         &Physics::default().mass(10.0),
     );

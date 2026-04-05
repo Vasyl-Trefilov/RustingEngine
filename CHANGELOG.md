@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.32] - 2026-04-5
+
+### Added
+
+- Added culling( when mesh is not in view => dont render ), but its beta, so its working bad
+
 ## [0.1.31] - 2026-04-4
 
 ### Added

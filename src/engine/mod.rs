@@ -22,11 +22,16 @@ use crate::scene::object::Instance;
 use crate::scene::{
     begin_render_pass_only, record_compute_physics_multi, ComputeDispatchInfo, RenderScene,
 };
+use cgmath::{Matrix4, SquareMatrix};
 
+use crate::rendering::compute_registry::CullPushConstants;
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::image::ImageUsage;
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage};
+use vulkano::pipeline::PipelineBindPoint;
 use vulkano::pipeline::{ComputePipeline, Pipeline};
 use vulkano::swapchain::{
     AcquireError, CompositeAlpha, PresentMode, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
@@ -46,7 +51,7 @@ pub struct PerspectiveCamera {
 impl PerspectiveCamera {
     pub fn new(fov: f32, aspect: f32, near: f32, far: f32) -> Self {
         Self {
-            position: [0.0, 50.0, 200.0],
+            position: [0.0, 5.0, 20.0],
             yaw: 90.0f32.to_radians(),
             pitch: 0.0,
             fov: fov.to_radians(),
@@ -246,7 +251,10 @@ impl Engine {
             shader: mat.shader,
             ..Default::default()
         };
-        self.scene.lock().unwrap().add_instance(mesh, inst);
+        self.scene
+            .lock()
+            .unwrap()
+            .add_instance(mesh, inst, &self.memory_allocator);
     }
 
     /// Adding a sphere to the scene.
@@ -287,7 +295,10 @@ impl Engine {
             shader: mat.shader,
             ..Default::default()
         };
-        self.scene.lock().unwrap().add_instance(mesh, inst);
+        self.scene
+            .lock()
+            .unwrap()
+            .add_instance(mesh, inst, &self.memory_allocator);
     }
 
     /// Set a scene-wide shader override. All objects will use this shader.
@@ -338,7 +349,6 @@ impl Engine {
         };
         eprintln!("[DBG] creating compute_sets");
 
-        
         let mut compute_sets: HashMap<
             ComputeShaderType,
             (Arc<PersistentDescriptorSet>, Arc<PersistentDescriptorSet>),
@@ -447,6 +457,22 @@ impl Engine {
         };
         eprintln!("[DBG] grid_build_sets done, starting event loop");
 
+        eprintln!("[DBG] creating culling");
+        let visible_indices_buffer = Buffer::new_slice::<u32>(
+            &self.memory_allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::DeviceOnly,
+                ..Default::default()
+            },
+            100_000,
+        )
+        .unwrap();
+        eprintln!("[DBG] culling system is done");
+
         let mut framebuffers =
             create_framebuffers(&self.images, &self.render_pass, &self.memory_allocator);
         let mut inputs = InputState::default();
@@ -456,6 +482,8 @@ impl Engine {
         let mut compute_ping_pong = false;
         let mut recreate_swapchain = false;
         let mut frame_index = 0;
+        let mut fps_timer = Instant::now();
+        let mut frame_count = 0;
 
         let mut event_loop = self.event_loop.take().unwrap();
         event_loop.run_return(move |event, _, control_flow| {
@@ -496,6 +524,17 @@ impl Engine {
                                     let _ =
                                         self.base.window.set_cursor_visible(!inputs.mouse_captured);
                                 }
+                                if code == VirtualKeyCode::C {
+                                    inputs.cull_enabled = !inputs.cull_enabled;
+                                    eprintln!(
+                                        "[DBG] Culling {}",
+                                        if inputs.cull_enabled {
+                                            "ENABLED"
+                                        } else {
+                                            "DISABLED"
+                                        }
+                                    );
+                                }
                                 inputs.keys.insert(code);
                             } else {
                                 inputs.keys.remove(&code);
@@ -508,16 +547,17 @@ impl Engine {
                 Event::MainEventsCleared => {
                     frame_index = (frame_index + 1) % 3;
 
-                    // frame_count += 1;
-                    // if fps_timer.elapsed().as_secs_f32() >= 2.0 {
-                    //     println!(
-                    //         "FPS: {:.0}",
-                    //         frame_count as f32 / fps_timer.elapsed().as_secs_f32()
-                    //     );
-                    //     frame_count = 0;
-                    //     fps_timer = Instant::now();
-                    // }
+                    frame_count += 1;
+                    if fps_timer.elapsed().as_secs_f32() >= 2.0 {
+                        println!(
+                            "FPS: {:.0}",
+                            frame_count as f32 / fps_timer.elapsed().as_secs_f32()
+                        );
+                        frame_count = 0;
+                        fps_timer = Instant::now();
+                    }
 
+                    let frame_start = std::time::Instant::now();
                     let now = Instant::now();
                     let mut delta_time = now.duration_since(last_frame_instant).as_secs_f32();
                     last_frame_instant = now;
@@ -623,6 +663,88 @@ impl Engine {
                         comp_future.wait(None).unwrap();
                     }
 
+                    let mut comp_builder =
+                        create_builder(&self.command_buffer_allocator, &self.base.queue);
+
+                    if inputs.cull_enabled {
+                        let cull_start = std::time::Instant::now();
+
+                        let view_proj = {
+                            let p = cgmath::Matrix4::from(proj);
+                            let v = cgmath::Matrix4::from(view);
+                            let vp: [[f32; 4]; 4] = (p * v).into();
+                            vp
+                        };
+
+                        let current_physics_buffer = if physics_idx == 0 {
+                            physics_read.clone()
+                        } else {
+                            physics_write.clone()
+                        };
+
+                        let mut s = self.scene.lock().unwrap();
+                        let mut current_physics_offset = 0;
+
+                        for batch in &mut s.batches {
+                            let count = batch.instances.len() as u32;
+                            if count == 0 {
+                                continue;
+                            }
+
+                            let cull_pipeline =
+                                self.compute_registry.get_pipeline(ComputeShaderType::Cull);
+                            let cull_set = PersistentDescriptorSet::new(
+                                &self.descriptor_set_allocator,
+                                cull_pipeline.layout().set_layouts()[0].clone(),
+                                [
+                                    WriteDescriptorSet::buffer(0, current_physics_buffer.clone()),
+                                    WriteDescriptorSet::buffer(1, visible_indices_buffer.clone()),
+                                    WriteDescriptorSet::buffer(2, batch.indirect_buffer.clone()),
+                                ],
+                            )
+                            .unwrap();
+
+                            comp_builder
+                                .bind_pipeline_compute(cull_pipeline.clone())
+                                .bind_descriptor_sets(
+                                    PipelineBindPoint::Compute,
+                                    cull_pipeline.layout().clone(),
+                                    0,
+                                    cull_set,
+                                )
+                                .push_constants(
+                                    cull_pipeline.layout().clone(),
+                                    0,
+                                    CullPushConstants {
+                                        view_proj,
+                                        batch_offset: current_physics_offset,
+                                        batch_count: count,
+                                        visible_list_offset: batch.base_instance_offset,
+                                    },
+                                )
+                                .dispatch([(count + 255) / 256, 1, 1])
+                                .unwrap();
+
+                            current_physics_offset += count;
+                        }
+
+                        let cull_cb = comp_builder.build().unwrap();
+
+                        let cull_future = sync::now(self.base.device.clone())
+                            .then_execute(self.base.queue.clone(), cull_cb)
+                            .unwrap()
+                            .then_signal_fence_and_flush()
+                            .unwrap();
+
+                        cull_future.wait(None).unwrap();
+
+                        if frame_count <= 3 {
+                            eprintln!("[DBG] Culling took {}us", cull_start.elapsed().as_micros());
+                        }
+
+                        drop(s);
+                    }
+
                     let mut render_builder =
                         create_builder(&self.command_buffer_allocator, &self.base.queue);
                     {
@@ -639,6 +761,7 @@ impl Engine {
                             &self.registry,
                             frame_index,
                             physics_idx,
+                            inputs.cull_enabled,
                         );
                         render_builder.end_render_pass().unwrap();
                     }
@@ -660,6 +783,12 @@ impl Engine {
 
                     match future {
                         Ok(_) => {
+                            if frame_count <= 2 {
+                                eprintln!(
+                                    "[DBG] Frame total: {}us",
+                                    frame_start.elapsed().as_micros()
+                                );
+                            }
                             previous_frame_end = Some(sync::now(self.base.device.clone()).boxed());
                         }
                         Err(FlushError::OutOfDate) => {
@@ -667,7 +796,7 @@ impl Engine {
                             previous_frame_end = Some(sync::now(self.base.device.clone()).boxed());
                         }
                         Err(e) => {
-                            println!("Flush error: {:?}", e);
+                            eprintln!("[DBG] Flush error: {:?}", e);
                             previous_frame_end = Some(sync::now(self.base.device.clone()).boxed());
                         }
                     }
@@ -682,4 +811,5 @@ impl Engine {
 struct InputState {
     keys: HashSet<VirtualKeyCode>,
     mouse_captured: bool,
+    cull_enabled: bool,
 }

@@ -4,7 +4,7 @@ use vulkano::pipeline::graphics::vertex_input::VertexInputAttributeDescription;
 use vulkano::pipeline::graphics::vertex_input::VertexInputBindingDescription;
 use vulkano::pipeline::graphics::vertex_input::VertexInputRate;
 use vulkano::pipeline::graphics::vertex_input::VertexInputState;
-use vulkano::pipeline::GraphicsPipeline;
+use vulkano::pipeline::graphics::GraphicsPipeline;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -74,12 +74,16 @@ use vulkano::device::Device;
 use vulkano::pipeline::graphics::depth_stencil::DepthStencilState;
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::input_assembly::PrimitiveTopology;
+use vulkano::pipeline::graphics::rasterization::FrontFace;
 use vulkano::pipeline::graphics::rasterization::{CullMode, RasterizationState};
 use vulkano::pipeline::graphics::viewport::ViewportState;
+use vulkano::pipeline::layout::PipelineLayout;
+use vulkano::pipeline::layout::PipelineLayoutCreateInfo;
+use vulkano::pipeline::layout::PushConstantRange;
+use vulkano::pipeline::Pipeline;
 use vulkano::render_pass::RenderPass;
 use vulkano::render_pass::Subpass;
 use vulkano::shader::ShaderModule;
-use vulkano::pipeline::graphics::rasterization::FrontFace;
 
 pub fn create_pipeline(
     vs: Arc<ShaderModule>,
@@ -87,16 +91,60 @@ pub fn create_pipeline(
     render_pass: &Arc<RenderPass>,
     device: &Arc<Device>,
 ) -> std::sync::Arc<GraphicsPipeline> {
-    GraphicsPipeline::start()
+    use vulkano::descriptor_set::layout::DescriptorSetLayout;
+
+    let temp_pipeline = GraphicsPipeline::start()
         .vertex_input_state(create_vertex_input_state())
         .vertex_shader(vs.entry_point("main").unwrap(), ())
         .input_assembly_state(InputAssemblyState::new().topology(PrimitiveTopology::TriangleList))
         .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-        // .rasterization_state(RasterizationState::new().cull_mode(CullMode::None)) // with this think you can like disable normals to see the back of objects
-        .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back).front_face(FrontFace::Clockwise)) 
+        .rasterization_state(
+            RasterizationState::new()
+                .cull_mode(CullMode::Back)
+                .front_face(FrontFace::Clockwise),
+        )
         .fragment_shader(fs.entry_point("main").unwrap(), ())
         .depth_stencil_state(DepthStencilState::simple_depth_test())
         .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
         .build(device.clone())
-        .unwrap()
+        .unwrap();
+
+    let set_layouts: Vec<Arc<DescriptorSetLayout>> = temp_pipeline
+        .layout()
+        .set_layouts()
+        .iter()
+        .cloned()
+        .collect();
+
+    let pipeline_layout = PipelineLayout::new(
+        device.clone(),
+        PipelineLayoutCreateInfo {
+            set_layouts,
+            push_constant_ranges: vec![PushConstantRange {
+                stages: vulkano::shader::ShaderStages::VERTEX,
+                offset: 0,
+                size: 8, // Two u32s: v_visible_list_offset and v_use_culling
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let pipeline = GraphicsPipeline::start()
+        .vertex_input_state(create_vertex_input_state())
+        .vertex_shader(vs.entry_point("main").unwrap(), ())
+        .input_assembly_state(InputAssemblyState::new().topology(PrimitiveTopology::TriangleList))
+        .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+        .rasterization_state(
+            RasterizationState::new()
+                .cull_mode(CullMode::Back)
+                .front_face(FrontFace::Clockwise),
+        )
+        .fragment_shader(fs.entry_point("main").unwrap(), ())
+        .depth_stencil_state(DepthStencilState::simple_depth_test())
+        .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
+        .with_pipeline_layout(device.clone(), pipeline_layout)
+        .unwrap();
+
+    pipeline
 }

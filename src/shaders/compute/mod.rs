@@ -39,3 +39,10 @@ pub mod cs_no_coll {
         path: "src/shaders/compute/no_coll.comp"
     }
 }
+
+pub mod cs_cull {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/shaders/compute/cull.comp"
+    }
+}

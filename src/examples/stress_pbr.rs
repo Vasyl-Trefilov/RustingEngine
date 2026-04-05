@@ -1,7 +1,9 @@
-use rusting_engine::{ComputeShaderType, Engine, Material, Physics, ShaderType, Transform, CollisionType};
+use rusting_engine::{
+    CollisionType, ComputeShaderType, Engine, Material, Physics, ShaderType, Transform,
+};
 /// # Stress Test: 10,000 PBR Cubes
 /// This example spawns 10,000 objects utilizing standard PBR shading.
-/// It highlights frame-rate impact relative to the Unlit version, as PBR 
+/// It highlights frame-rate impact relative to the Unlit version, as PBR
 /// calculates complex lighting, metallic/roughness values, and environment interactions.
 /// also good example of usage `set_scene_shader` and `set_scene_physic`
 pub fn main() {
@@ -15,11 +17,11 @@ pub fn main() {
         .color([0.2, 1.0, 0.2])
         .shader(ShaderType::Pbr)
         .build();
-    let grid_size = 50; // 20 * 25 * 20 = 10,000 cubes
-    
-    // Spawn 10,000 interactive physical cubes 
+    let grid_size = 20; // 20 * 25 * 20 = 10,000 cubes
+
+    // Spawn 10,000 interactive physical cubes
     for x in 0..grid_size {
-        for y in 0..50 {
+        for y in 0..20 {
             for z in 0..grid_size {
                 let pos = [
                     (x as f32 - grid_size as f32 / 2.0) * 1.5,
@@ -29,18 +31,22 @@ pub fn main() {
                 let cube_size = 1.0;
                 let radius = cube_size * 0.5;
                 // Alternate colors
-                let mat = if (x + y + z) % 2 == 0 { &red_pbr } else { &green_pbr };
+                let mat = if (x + y + z) % 2 == 0 {
+                    &red_pbr
+                } else {
+                    &green_pbr
+                };
                 engine.add_cube(
                     Transform {
                         position: pos,
-                        scale: [cube_size,cube_size,cube_size],
+                        scale: [cube_size, cube_size, cube_size],
                         ..Default::default()
                     },
                     mat,
                     &Physics::default()
                         .compute_shader(ComputeShaderType::Test)
                         .mass(1.0)
-                        .collision_type(CollisionType::Box) 
+                        .collision_type(CollisionType::Box)
                         .gravity_scale(1.0),
                 );
             }
@@ -79,17 +85,17 @@ pub fn main() {
             scale: [10.0, 10.0, 10.0],
             ..Default::default()
         },
-    &Material::standard()
+        &Material::standard()
             .color([0.1, 1.0, 0.1])
             .shader(ShaderType::Pbr)
             .build(),
-    &Physics::default()
+        &Physics::default()
             .compute_shader(ComputeShaderType::Test)
             .mass(10000.0)
             .gravity_scale(10.0)
             .collision_type(CollisionType::Sphere),
-            2
-        );
+        2,
+    );
 
     engine.set_scene_shader(ShaderType::Pbr);
     engine.set_scene_physic(ComputeShaderType::Test);

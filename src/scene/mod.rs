@@ -39,6 +39,15 @@ use crate::rendering::pipeline::UniformBufferObject;
 use crate::rendering::shader_registry::{ShaderRegistry, ShaderType};
 use crate::scene::animation::AnimationType;
 use crate::scene::object::{Instance, InstanceData, RenderBatch, Texture, Transform};
+use vulkano::command_buffer::{DrawIndexedIndirectCommand, DrawIndirectCommand};
+
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct MeshPushConstants {
+    pub visible_list_offset: u32,
+    pub use_culling: u32, // 0 = direct, 1 = indirect
+}
+
 pub struct ComputeDispatchInfo {
     pub compute_shader: ComputeShaderType,
     pub offset: u32,
@@ -62,6 +71,7 @@ pub struct RenderScene {
     pub num_big_objects: u32,
     pub grid_counts: Subbuffer<[u32]>,
     pub grid_objects: Subbuffer<[u32]>,
+    pub visible_indices: Subbuffer<[u32]>,
     pub total_instances: u32,
     pub max_object_radius: f32,
 }
@@ -77,7 +87,12 @@ pub struct InstanceHandle {
 }
 
 impl RenderScene {
-    pub fn add_instance(&mut self, mesh: Mesh, instance: Instance) -> InstanceHandle {
+    pub fn add_instance(
+        &mut self,
+        mesh: Mesh,
+        instance: Instance,
+        allocator: &Arc<StandardMemoryAllocator>,
+    ) -> InstanceHandle {
         let shader = instance.shader;
         let compute_shader = instance.physics.compute_shader;
         for (batch_index, batch) in self.batches.iter_mut().enumerate() {
@@ -99,6 +114,22 @@ impl RenderScene {
             shader,
             compute_shader,
             instances: vec![instance],
+            base_instance_offset: 0,
+            indirect_buffer: Buffer::new_slice::<DrawIndexedIndirectCommand>(
+                allocator,
+                BufferCreateInfo {
+                    usage: BufferUsage::INDIRECT_BUFFER
+                        | BufferUsage::STORAGE_BUFFER
+                        | BufferUsage::TRANSFER_DST,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    usage: MemoryUsage::DeviceOnly,
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap(),
         });
 
         InstanceHandle {
@@ -236,7 +267,22 @@ impl RenderScene {
             hash_size * max_per_cell,
         )
         .unwrap();
-        let mut scene = Self {
+
+        let visible_indices = Buffer::new_slice::<u32>(
+            memory_allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::DeviceOnly,
+                ..Default::default()
+            },
+            1_000_000,
+        )
+        .unwrap();
+
+        Self {
             batches: Vec::new(),
             frames,
             light_pos: [0.0, 10.0, 0.0],
@@ -253,9 +299,9 @@ impl RenderScene {
             num_big_objects: 1024,
             grid_counts,
             grid_objects,
+            visible_indices,
             max_object_radius: 0.0,
-        };
-        scene
+        }
     }
 
     pub fn upload_to_gpu(
@@ -375,6 +421,64 @@ impl RenderScene {
             ))
             .unwrap();
 
+        let mut indirect_data: Vec<DrawIndexedIndirectCommand> = Vec::new();
+        for batch in &self.batches {
+            indirect_data.push(DrawIndexedIndirectCommand {
+                index_count: batch.mesh.index_count,
+                instance_count: batch.instances.len() as u32,
+                first_index: 0,
+                vertex_offset: 0,
+                first_instance: 0,
+            });
+        }
+
+        let indirect_staging = Buffer::from_iter(
+            allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::Upload,
+                ..Default::default()
+            },
+            indirect_data,
+        )
+        .unwrap();
+
+        let mut indirect_offset = 0u64;
+        let cmd_size = std::mem::size_of::<DrawIndexedIndirectCommand>() as u64;
+
+        for batch in &self.batches {
+            let cmd = DrawIndexedIndirectCommand {
+                index_count: batch.mesh.index_count,
+                instance_count: batch.instances.len() as u32,
+                first_index: 0,
+                vertex_offset: 0,
+                first_instance: 0,
+            };
+            let single_staging = Buffer::from_iter(
+                allocator,
+                BufferCreateInfo {
+                    usage: BufferUsage::TRANSFER_SRC,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    usage: MemoryUsage::Upload,
+                    ..Default::default()
+                },
+                std::iter::once(cmd),
+            )
+            .unwrap();
+            builder
+                .copy_buffer(CopyBufferInfoTyped::buffers(
+                    single_staging,
+                    batch.indirect_buffer.clone(),
+                ))
+                .unwrap();
+            indirect_offset += cmd_size;
+        }
+
         if !big_indices.is_empty() {
             let big_staging = Buffer::from_iter(
                 allocator,
@@ -418,8 +522,9 @@ impl RenderScene {
         } else {
             let mut dispatches = Vec::new();
             let mut current_offset = 0;
-            for batch in &self.batches {
+            for batch in &mut self.batches {
                 let count = batch.instances.len() as u32;
+                batch.base_instance_offset = current_offset;
                 dispatches.push(ComputeDispatchInfo {
                     compute_shader: batch.compute_shader,
                     offset: current_offset,
@@ -460,6 +565,7 @@ impl RenderScene {
                             self.texture_sampler.clone(),
                         ),
                         WriteDescriptorSet::buffer(2, self.physics_read.clone()),
+                        WriteDescriptorSet::buffer(3, self.visible_indices.clone()),
                     ],
                 )
                 .unwrap();
@@ -476,6 +582,7 @@ impl RenderScene {
                             self.texture_sampler.clone(),
                         ),
                         WriteDescriptorSet::buffer(2, self.physics_write.clone()),
+                        WriteDescriptorSet::buffer(3, self.visible_indices.clone()),
                     ],
                 )
                 .unwrap();
@@ -540,17 +647,15 @@ impl RenderScene {
         registry: &ShaderRegistry,
         frame_index: usize,
         physics_buffer_index: usize,
+        use_culling: bool,
     ) {
-        let mut current_offset = 0;
         let mut last_shader: Option<ShaderType> = None;
 
         for batch in &self.batches {
-            let count = batch.instances.len() as u32;
-            if count == 0 {
+            if batch.instances.is_empty() {
                 continue;
             }
 
-            // Resolve effective shader (scene override or per-batch)
             let effective_shader = registry.resolve_shader(batch.shader);
             let pipeline = registry.get_pipeline(effective_shader);
 
@@ -558,6 +663,15 @@ impl RenderScene {
                 builder.bind_pipeline_graphics(pipeline.clone());
                 last_shader = Some(effective_shader);
             }
+
+            builder.push_constants(
+                pipeline.layout().clone(),
+                0,
+                MeshPushConstants {
+                    visible_list_offset: batch.base_instance_offset,
+                    use_culling: if use_culling { 1 } else { 0 },
+                },
+            );
 
             builder.bind_vertex_buffers(0, (batch.mesh.vertices.clone(),));
 
@@ -573,16 +687,20 @@ impl RenderScene {
 
             if let Some(indices) = &batch.mesh.indices {
                 builder.bind_index_buffer(indices.clone());
+            
                 builder
-                    .draw_indexed(batch.mesh.index_count, count, 0, 0, current_offset)
+                    .draw_indexed_indirect(batch.indirect_buffer.clone())
                     .unwrap();
             } else {
                 builder
-                    .draw(batch.mesh.vertex_count, count, 0, current_offset)
+                    .draw(
+                        batch.mesh.vertex_count,
+                        batch.instances.len() as u32,
+                        0,
+                        batch.base_instance_offset,
+                    )
                     .unwrap();
             }
-
-            current_offset += count;
         }
     }
     pub fn prepare_frame_ubo(
