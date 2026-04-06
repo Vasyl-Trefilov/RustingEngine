@@ -25,3 +25,10 @@ pub mod fs_normal_debug {
         path: "src/shaders/fragment/debug.frag"
     }
 }
+
+pub mod fs_heavy {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/shaders/fragment/heavy.frag"
+    }
+}

@@ -17,19 +17,18 @@ pub fn main() {
         .color([0.2, 1.0, 0.2])
         .shader(ShaderType::Pbr)
         .build();
-    let grid_size = 20; // 20 * 25 * 20 = 10,000 cubes
+    let grid_size = 20; 
 
-    // Spawn 10,000 interactive physical cubes
+
     for x in 0..grid_size {
-        for y in 0..20 {
+        for y in 0..grid_size {
             for z in 0..grid_size {
                 let pos = [
-                    (x as f32 - grid_size as f32 / 2.0) * 1.5,
-                    y as f32 * 1.5 + 7.0,
-                    (z as f32 - grid_size as f32 / 2.0) * 1.5,
+                    (x as f32 - grid_size as f32 / 2.0) * 5.0,
+                    y as f32 * 5.0 + 7.0,
+                    (z as f32 - grid_size as f32 / 2.0) * 5.0,
                 ];
-                let cube_size = 1.0;
-                let radius = cube_size * 0.5;
+                let cube_size = 4.0;
                 // Alternate colors
                 let mat = if (x + y + z) % 2 == 0 {
                     &red_pbr
@@ -44,10 +43,10 @@ pub fn main() {
                     },
                     mat,
                     &Physics::default()
-                        .compute_shader(ComputeShaderType::Test)
+                        .compute_shader(ComputeShaderType::Empty)
                         .mass(1.0)
                         .collision_type(CollisionType::Box)
-                        .gravity_scale(1.0),
+                        .gravity_scale(0.0),
                 );
             }
         }

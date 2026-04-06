@@ -4,7 +4,6 @@ use std::sync::Arc;
 use vulkano::device::Device;
 use vulkano::pipeline::GraphicsPipeline;
 use vulkano::render_pass::RenderPass;
-use vulkano::shader::ShaderModule;
 
 use crate::rendering::pipeline::create_pipeline;
 use crate::shaders::{fragment::*, vertex::vs};
@@ -24,6 +23,8 @@ pub enum ShaderType {
     Emissive,
     /// Visualize surface normals as RGB colors. Useful for debugging geometry.
     NormalDebug,
+    /// Intentionally heavy shader (8 lights, FBM noise, SSS, AO).
+    Heavy,
 }
 
 impl ShaderType {
@@ -34,6 +35,7 @@ impl ShaderType {
             ShaderType::Unlit,
             ShaderType::Emissive,
             ShaderType::NormalDebug,
+            ShaderType::Heavy,
         ]
     }
 
@@ -44,6 +46,7 @@ impl ShaderType {
             ShaderType::Unlit => 1,
             ShaderType::Emissive => 2,
             ShaderType::NormalDebug => 3,
+            ShaderType::Heavy => 4,
         }
     }
 }
@@ -91,7 +94,14 @@ impl ShaderRegistry {
             .expect("Failed to load NormalDebug fragment shader");
         pipelines.insert(
             ShaderType::NormalDebug,
-            create_pipeline(vs_module, fs_normal_mod, render_pass, device),
+            create_pipeline(vs_module.clone(), fs_normal_mod, render_pass, device),
+        );
+
+        let fs_heavy_mod = fs_heavy::load(device.clone())
+            .expect("Failed to load Heavy fragment shader");
+        pipelines.insert(
+            ShaderType::Heavy,
+            create_pipeline(vs_module, fs_heavy_mod, render_pass, device),
         );
 
         Self {

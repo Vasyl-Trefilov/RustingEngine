@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! This is a test file, where I test the user-friendliness of my library
 mod examples;
 use crate::examples::physics::main as physics_main;
@@ -13,7 +15,7 @@ fn main() {
     // physics_main();
 
     // 10,000 cubes stress testing
-    // unlit_main(); // Run the performance-heavy version via PBR or Unlit
+    // unlit_main(); 
     pbr_main();
 
     // rotate test

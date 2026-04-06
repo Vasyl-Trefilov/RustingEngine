@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use vulkano::sync::GpuFuture;
-use winit::event::{Event, MouseButton, VirtualKeyCode, WindowEvent};
+use winit::event::{Event, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::run_return::EventLoopExtRunReturn;
 use winit::window::CursorGrabMode;
@@ -13,26 +13,22 @@ use crate::geometry::shapes::{create_cube, create_sphere_subdivided};
 use crate::rendering::camera::create_projection_matrix;
 use crate::rendering::compute_registry::{ComputeShaderRegistry, ComputeShaderType};
 use crate::rendering::init_vulkan;
-use crate::rendering::pipeline::create_pipeline;
 use crate::rendering::render::create_builder;
 use crate::rendering::shader_registry::{ShaderRegistry, ShaderType};
 use crate::rendering::swapchain::{create_framebuffers, create_render_pass};
 use crate::rendering::VulkanBase;
 use crate::scene::object::Instance;
 use crate::scene::{
-    begin_render_pass_only, record_compute_physics_multi, ComputeDispatchInfo, RenderScene,
+    begin_render_pass_only, record_compute_physics_multi, RenderScene,
 };
-use cgmath::{Matrix4, SquareMatrix};
 
 use crate::rendering::compute_registry::CullPushConstants;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::image::ImageUsage;
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage};
 use vulkano::pipeline::PipelineBindPoint;
-use vulkano::pipeline::{ComputePipeline, Pipeline};
+use vulkano::pipeline::{Pipeline};
 use vulkano::swapchain::{
     AcquireError, CompositeAlpha, PresentMode, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
 };
@@ -79,7 +75,7 @@ impl PerspectiveCamera {
         let view_forward = [yaw_cos * pitch_cos, pitch_sin, yaw_sin * pitch_cos];
 
         if mouse_captured {
-            let speed = 0.1 * sprint;
+            let speed = 50.0 * sprint * dt;
             if keys.contains(&VirtualKeyCode::W) {
                 for i in 0..3 {
                     self.position[i] += forward[i] * speed;
@@ -239,7 +235,7 @@ impl Engine {
         let mesh = if let Some(cached) = &self.cached_cube_mesh {
             cached.clone()
         } else {
-            let m = crate::geometry::shapes::create_cube(&self.memory_allocator);
+            let m = create_cube(&self.memory_allocator);
             self.cached_cube_mesh = Some(m.clone());
             m
         };
@@ -282,8 +278,7 @@ impl Engine {
         let mesh = if let Some(cached) = &self.cached_sphere_mesh {
             cached.clone()
         } else {
-            let m =
-                crate::geometry::shapes::create_sphere_subdivided(&self.memory_allocator, subdiv);
+            let m = create_sphere_subdivided(&self.memory_allocator, subdiv);
             self.cached_sphere_mesh = Some(m.clone());
             m
         };
@@ -327,10 +322,8 @@ impl Engine {
     /// It handles event dispatch, physics update intervals, and issues continuous draw calls.
     pub fn run(mut self) {
         eprintln!("[DBG] run() start");
-        let mut previous_frame_end: Option<Box<dyn GpuFuture>> =
-            Some(sync::now(self.base.device.clone()).boxed());
         eprintln!("[DBG] starting upload");
-        let (physics_read, physics_write, mut solid_obj_count, dispatches) = {
+        let (physics_read, physics_write, solid_obj_count, dispatches, visible_indices_buffer) = {
             let mut s = self.scene.lock().unwrap();
             let d = s.upload_to_gpu(
                 &self.memory_allocator,
@@ -345,6 +338,7 @@ impl Engine {
                 s.physics_write.clone(),
                 s.total_instances,
                 d,
+                s.visible_indices.clone(), // Use scene's buffer for culling
             )
         };
         eprintln!("[DBG] creating compute_sets");
@@ -457,22 +451,6 @@ impl Engine {
         };
         eprintln!("[DBG] grid_build_sets done, starting event loop");
 
-        eprintln!("[DBG] creating culling");
-        let visible_indices_buffer = Buffer::new_slice::<u32>(
-            &self.memory_allocator,
-            BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                usage: MemoryUsage::DeviceOnly,
-                ..Default::default()
-            },
-            100_000,
-        )
-        .unwrap();
-        eprintln!("[DBG] culling system is done");
-
         let mut framebuffers =
             create_framebuffers(&self.images, &self.render_pass, &self.memory_allocator);
         let mut inputs = InputState::default();
@@ -577,9 +555,8 @@ impl Engine {
                                 })
                                 .unwrap();
                             self.swapchain = new_sw;
-                            self.images = new_img;
                             framebuffers = create_framebuffers(
-                                &self.images,
+                                &new_img,
                                 &self.render_pass,
                                 &self.memory_allocator,
                             );
@@ -619,7 +596,6 @@ impl Engine {
                     {
                         let mut s = self.scene.lock().unwrap();
                         s.prepare_frame_ubo(frame_index, view, proj, cam_pos);
-                        solid_obj_count = s.total_instances;
                         let tex_count = s.texture_views.len();
                         s.ensure_descriptor_cache(self.registry.default_pipeline(), tex_count);
                     }
@@ -683,12 +659,17 @@ impl Engine {
                         };
 
                         let mut s = self.scene.lock().unwrap();
-                        let mut current_physics_offset = 0;
+                        let mut current_physics_offset = 0u32;
 
                         for batch in &mut s.batches {
                             let count = batch.instances.len() as u32;
                             if count == 0 {
                                 continue;
+                            }
+
+                            {
+                                let mut guard = batch.indirect_buffer.write().unwrap();
+                                guard[0].instance_count = 0;
                             }
 
                             let cull_pipeline =
@@ -739,7 +720,16 @@ impl Engine {
                         cull_future.wait(None).unwrap();
 
                         if frame_count <= 3 {
-                            eprintln!("[DBG] Culling took {}us", cull_start.elapsed().as_micros());
+                            let visible: u32 = s.batches.iter().map(|b| {
+                                let guard = b.indirect_buffer.read().unwrap();
+                                guard[0].instance_count
+                            }).sum();
+                            eprintln!(
+                                "[DBG] Culling took {}us — visible: {} / {}",
+                                cull_start.elapsed().as_micros(),
+                                visible,
+                                solid_obj_count,
+                            );
                         }
 
                         drop(s);
@@ -789,15 +779,12 @@ impl Engine {
                                     frame_start.elapsed().as_micros()
                                 );
                             }
-                            previous_frame_end = Some(sync::now(self.base.device.clone()).boxed());
                         }
                         Err(FlushError::OutOfDate) => {
                             recreate_swapchain = true;
-                            previous_frame_end = Some(sync::now(self.base.device.clone()).boxed());
                         }
                         Err(e) => {
                             eprintln!("[DBG] Flush error: {:?}", e);
-                            previous_frame_end = Some(sync::now(self.base.device.clone()).boxed());
                         }
                     }
                 }

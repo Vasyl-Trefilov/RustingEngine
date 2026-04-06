@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 
 /// CollisionType used to make more user friendly interface and hide math
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

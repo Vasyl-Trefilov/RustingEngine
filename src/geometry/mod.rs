@@ -1,6 +1,8 @@
+#[allow(dead_code, unused)]
+
 // ! SHAPE AND MESH SYSTEM - Defines geometry and scene organization
 // More I do this, more I understand and respect all developers that created a blender, unity, unreal engine and etc. just F for every man that did something like that and biggest F for that people, who did it opensource. F
-pub mod gltfLoader;
+pub mod gltf_loader;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator};
@@ -245,6 +247,7 @@ pub mod shapes {
 
     // Helper function to add a quad as two triangles
     // I dont know who will use it, maybe some chill guy                      or lady....
+    #[allow(dead_code)]
     fn add_quad(
         vertices: &mut Vec<VertexPosColorUv>,
         p1: [f32; 3],
@@ -570,7 +573,7 @@ pub mod shapes {
             });
         }
 
-        let mut final_indices: Vec<u32> = (0..final_vertices.len() as u32).collect();
+        let final_indices: Vec<u32> = (0..final_vertices.len() as u32).collect();
         Mesh::new(memory_allocator, &final_vertices, Some(&final_indices))
     }
 

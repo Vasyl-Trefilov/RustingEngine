@@ -32,7 +32,6 @@ use vulkano::sync::GpuFuture;
 use vulkano::DeviceSize;
 
 use crate::geometry::Mesh;
-use crate::input::MouseState;
 use crate::rendering::compute_registry::ComputeShaderRegistry;
 use crate::rendering::compute_registry::ComputeShaderType;
 use crate::rendering::pipeline::UniformBufferObject;
@@ -124,7 +123,7 @@ impl RenderScene {
                     ..Default::default()
                 },
                 AllocationCreateInfo {
-                    usage: MemoryUsage::DeviceOnly,
+                    usage: MemoryUsage::Upload,
                     ..Default::default()
                 },
                 1,
@@ -687,10 +686,22 @@ impl RenderScene {
 
             if let Some(indices) = &batch.mesh.indices {
                 builder.bind_index_buffer(indices.clone());
-            
-                builder
-                    .draw_indexed_indirect(batch.indirect_buffer.clone())
-                    .unwrap();
+
+                if use_culling {
+                    builder
+                        .draw_indexed_indirect(batch.indirect_buffer.clone())
+                        .unwrap();
+                } else {
+                    builder
+                        .draw_indexed(
+                            batch.mesh.index_count,
+                            batch.instances.len() as u32,
+                            0,
+                            0,
+                            batch.base_instance_offset,
+                        )
+                        .unwrap();
+                }
             } else {
                 builder
                     .draw(
