@@ -45,6 +45,7 @@ pub fn main() {
                     &Physics::default()
                         .compute_shader(ComputeShaderType::Empty)
                         .mass(1.0)
+                        .bounciness(1.0)
                         .collision_type(CollisionType::Box)
                         .gravity_scale(0.0),
                 );

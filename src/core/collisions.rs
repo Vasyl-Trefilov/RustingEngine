@@ -1,4 +1,3 @@
-
 /// CollisionType used to make more user friendly interface and hide math
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CollisionType {
@@ -10,6 +9,8 @@ pub enum CollisionType {
 }
 
 impl CollisionType {
+
+    /// This function return number for collision type that will be used in shaders
     pub fn sort_key(&self) -> f32 {
         match self {
             CollisionType::Sphere => 0.8,
