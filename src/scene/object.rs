@@ -3,10 +3,8 @@ use crate::rendering::shader_registry::ShaderType;
 use crate::scene::animation::AnimationType;
 use crate::{geometry::Mesh, Physics};
 use nalgebra::{Matrix4, Rotation3, Vector3};
-use std::sync::Arc;
 use vulkano::buffer::Subbuffer;
-use vulkano::command_buffer::{DrawIndexedIndirectCommand, DrawIndirectCommand};
-use vulkano::image::{view::ImageView, ImageAccess};
+use vulkano::command_buffer::DrawIndexedIndirectCommand;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

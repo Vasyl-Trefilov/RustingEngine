@@ -12,7 +12,7 @@ use vulkano::command_buffer::allocator::{
 use vulkano::command_buffer::RenderPassBeginInfo;
 use vulkano::command_buffer::SubpassContents;
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, CopyBufferInfoTyped,
+    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfoTyped,
     PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract,
 };
 use vulkano::descriptor_set::{
@@ -24,21 +24,18 @@ use vulkano::image::view::ImageView;
 use vulkano::image::ImmutableImage;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator};
 use vulkano::pipeline::graphics::viewport::Viewport;
-use vulkano::pipeline::ComputePipeline;
 use vulkano::pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint};
 use vulkano::render_pass::Framebuffer;
 use vulkano::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode};
 use vulkano::sync::GpuFuture;
-use vulkano::DeviceSize;
 
 use crate::geometry::Mesh;
 use crate::rendering::compute_registry::ComputeShaderRegistry;
 use crate::rendering::compute_registry::ComputeShaderType;
 use crate::rendering::pipeline::UniformBufferObject;
 use crate::rendering::shader_registry::{ShaderRegistry, ShaderType};
-use crate::scene::animation::AnimationType;
-use crate::scene::object::{Instance, InstanceData, RenderBatch, Texture, Transform};
-use vulkano::command_buffer::{DrawIndexedIndirectCommand, DrawIndirectCommand};
+use crate::scene::object::{Instance, InstanceData, RenderBatch, Texture};
+use vulkano::command_buffer::DrawIndexedIndirectCommand;
 
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -152,7 +149,7 @@ impl RenderScene {
     pub fn new(
         memory_allocator: &Arc<StandardMemoryAllocator>,
         descriptor_set_allocator: &Arc<StandardDescriptorSetAllocator>,
-        pipeline: &Arc<GraphicsPipeline>,
+        _pipeline: &Arc<GraphicsPipeline>,
         queue: &Arc<Queue>,
         frames_in_flight: usize,
         max_instances: usize,
@@ -431,7 +428,7 @@ impl RenderScene {
             });
         }
 
-        let indirect_staging = Buffer::from_iter(
+        let _indirect_staging = Buffer::from_iter(
             allocator,
             BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC,
