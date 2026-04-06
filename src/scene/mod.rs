@@ -2,7 +2,6 @@ pub mod animation;
 pub mod object;
 
 use crate::scene::object::PhysicsPushConstants;
-use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
@@ -442,9 +441,6 @@ impl RenderScene {
         )
         .unwrap();
 
-        let mut indirect_offset = 0u64;
-        let cmd_size = std::mem::size_of::<DrawIndexedIndirectCommand>() as u64;
-
         for batch in &self.batches {
             let cmd = DrawIndexedIndirectCommand {
                 index_count: batch.mesh.index_count,
@@ -472,7 +468,6 @@ impl RenderScene {
                     batch.indirect_buffer.clone(),
                 ))
                 .unwrap();
-            indirect_offset += cmd_size;
         }
 
         if !big_indices.is_empty() {

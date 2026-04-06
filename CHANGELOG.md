@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.4] - 2026-04-5
+
+### Added
+
+- Better code, now no warnings( before was like 60 )
+- Added new very heavy fragment shader with noise and other things
+- Culling toggle on 'C
+
+### Fixed
+
+- Culling is working well and give insane performance boost on big scenes where fragment/vertex shader is heavy. But it uses object center, so some object might disappear earlier as needed. I will fix it in next patch
+
 ## [0.1.32] - 2026-04-5
 
 ### Added
