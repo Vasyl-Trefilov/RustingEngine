@@ -1,12 +1,18 @@
 # Changelog
 
+## [0.1.41] - 2026-04-6
+
+### Added
+
+- Added gltf models import, already with Materials, Textures and everything that needed
+
 ## [0.1.4] - 2026-04-5
 
 ### Added
 
 - Better code, now no warnings( before was like 60 )
 - Added new very heavy fragment shader with noise and other things
-- Culling toggle on 'C
+- Culling toggle on 'C'
 
 ### Fixed
 

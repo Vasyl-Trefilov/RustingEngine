@@ -11,8 +11,8 @@ use vulkano::command_buffer::allocator::{
 use vulkano::command_buffer::RenderPassBeginInfo;
 use vulkano::command_buffer::SubpassContents;
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfoTyped,
-    PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract,
+    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfoTyped, PrimaryAutoCommandBuffer,
+    PrimaryCommandBufferAbstract,
 };
 use vulkano::descriptor_set::{
     allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -799,7 +799,7 @@ impl RenderScene {
             let view = ImageView::new_default(image).unwrap();
             self.texture_views.push(view);
         }
-        self.ensure_descriptor_cache(pipeline, textures.len());
+        self.ensure_descriptor_cache(pipeline, self.texture_views.len());
     }
 
     pub fn set_light(&mut self, position: [f32; 3], color: [f32; 3], intensity: f32) {

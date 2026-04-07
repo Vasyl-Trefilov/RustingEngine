@@ -1,3 +1,15 @@
+use crate::core::{Material, Physics, Transform};
+use crate::geometry::gltf_loader::load_gltf_scene;
+use crate::geometry::shapes::{create_cube, create_sphere_subdivided};
+use crate::rendering::camera::create_projection_matrix;
+use crate::rendering::compute_registry::{ComputeShaderRegistry, ComputeShaderType};
+use crate::rendering::init_vulkan;
+use crate::rendering::render::create_builder;
+use crate::rendering::shader_registry::{ShaderRegistry, ShaderType};
+use crate::rendering::swapchain::{create_framebuffers, create_render_pass};
+use crate::rendering::VulkanBase;
+use crate::scene::object::Instance;
+use crate::scene::{begin_render_pass_only, record_compute_physics_multi, RenderScene};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -8,27 +20,13 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::run_return::EventLoopExtRunReturn;
 use winit::window::CursorGrabMode;
 
-use crate::core::{Material, Physics, Transform};
-use crate::geometry::shapes::{create_cube, create_sphere_subdivided};
-use crate::rendering::camera::create_projection_matrix;
-use crate::rendering::compute_registry::{ComputeShaderRegistry, ComputeShaderType};
-use crate::rendering::init_vulkan;
-use crate::rendering::render::create_builder;
-use crate::rendering::shader_registry::{ShaderRegistry, ShaderType};
-use crate::rendering::swapchain::{create_framebuffers, create_render_pass};
-use crate::rendering::VulkanBase;
-use crate::scene::object::Instance;
-use crate::scene::{
-    begin_render_pass_only, record_compute_physics_multi, RenderScene,
-};
-
 use crate::rendering::compute_registry::CullPushConstants;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::image::ImageUsage;
+use vulkano::pipeline::Pipeline;
 use vulkano::pipeline::PipelineBindPoint;
-use vulkano::pipeline::{Pipeline};
 use vulkano::swapchain::{
     AcquireError, CompositeAlpha, PresentMode, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
 };
@@ -296,6 +294,32 @@ impl Engine {
             .add_instance(mesh, inst, &self.memory_allocator);
     }
 
+    pub fn add_gltf(&mut self, transform: Transform, mat: &Material, phys: &Physics, path: &str) {
+        let (objects, textures) = load_gltf_scene(&self.memory_allocator, path);
+
+        let base_texture_count = self.scene.lock().unwrap().texture_views.len();
+
+        let pipeline = self.registry.default_pipeline();
+        self.scene.lock().unwrap().set_textures(
+            &pipeline,
+            &textures,
+            &self.base.queue,
+            &self.memory_allocator,
+        );
+
+        for (mut mesh, mut instance) in objects {
+            if let Some(tex_idx) = mesh.base_color_texture {
+                mesh.base_color_texture = Some(tex_idx + base_texture_count);
+            }
+            instance.model_matrix = transform.to_matrix();
+            instance.physics = *phys;
+            instance.shader = mat.shader;
+            self.scene
+                .lock()
+                .unwrap()
+                .add_instance(mesh.clone(), instance, &self.memory_allocator);
+        }
+    }
     /// Set a scene-wide shader override. All objects will use this shader.
     pub fn set_scene_shader(&mut self, shader: ShaderType) {
         self.registry.set_scene_shader(shader);
@@ -720,10 +744,14 @@ impl Engine {
                         cull_future.wait(None).unwrap();
 
                         if frame_count <= 3 {
-                            let visible: u32 = s.batches.iter().map(|b| {
-                                let guard = b.indirect_buffer.read().unwrap();
-                                guard[0].instance_count
-                            }).sum();
+                            let visible: u32 = s
+                                .batches
+                                .iter()
+                                .map(|b| {
+                                    let guard = b.indirect_buffer.read().unwrap();
+                                    guard[0].instance_count
+                                })
+                                .sum();
                             eprintln!(
                                 "[DBG] Culling took {}us — visible: {} / {}",
                                 cull_start.elapsed().as_micros(),
