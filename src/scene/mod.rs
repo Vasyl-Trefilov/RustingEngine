@@ -157,14 +157,14 @@ impl RenderScene {
     ) -> InstanceHandle {
         let shader = instance.shader;
         let compute_shader = instance.physics.compute_shader;
-        let base_color_texture = mesh.base_color_texture;
-        let metallic_roughness_texture = mesh.metallic_roughness_texture;
+        let base_color_texture = instance.base_color_texture;
+        let metallic_roughness_texture = instance.metallic_roughness_texture;
         for (batch_index, batch) in self.batches.iter_mut().enumerate() {
             if batch.mesh.vertices.buffer() == mesh.vertices.buffer()
                 && batch.shader == shader
                 && batch.compute_shader == compute_shader
-                && batch.mesh.base_color_texture == base_color_texture
-                && batch.mesh.metallic_roughness_texture == metallic_roughness_texture
+                && batch.base_color_texture == base_color_texture
+                && batch.metallic_roughness_texture == metallic_roughness_texture
             {
                 batch.instances.push(instance);
 
@@ -177,6 +177,8 @@ impl RenderScene {
 
         self.batches.push(RenderBatch {
             mesh,
+            base_color_texture,
+            metallic_roughness_texture,
             shader,
             compute_shader,
             instances: vec![instance],
@@ -732,7 +734,7 @@ impl RenderScene {
 
             builder.bind_vertex_buffers(0, (batch.mesh.vertices.clone(),));
 
-            let requested_tex = batch.mesh.base_color_texture.unwrap_or(0);
+            let requested_tex = batch.base_color_texture.unwrap_or(0);
             let descriptor_idx = (requested_tex * 2) + physics_buffer_index;
 
             builder.bind_descriptor_sets(
@@ -795,7 +797,7 @@ impl RenderScene {
 
             builder.bind_vertex_buffers(0, (batch.mesh.vertices.clone(),));
 
-            let requested_tex = batch.mesh.base_color_texture.unwrap_or(0);
+            let requested_tex = batch.base_color_texture.unwrap_or(0);
             let descriptor_idx = (requested_tex * 2) + physics_buffer_index;
 
             builder.bind_descriptor_sets(

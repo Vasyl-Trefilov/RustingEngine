@@ -201,6 +201,10 @@ pub struct Engine {
     cached_cube_mesh: Option<crate::geometry::Mesh>,
     /// Cached sphere mesh - reused for all sphere instances
     cached_sphere_mesh: Option<crate::geometry::Mesh>,
+    /// Global loaded textures map: Path/Name -> Texture ID
+    pub textures_cache: HashMap<String, usize>,
+    /// Global GLTF Cache: Path -> parsed models and relative transforms
+    pub gltf_cache: HashMap<String, Vec<(crate::geometry::Mesh, Instance)>>,
 }
 
 impl Engine {
@@ -283,6 +287,8 @@ impl Engine {
             ))),
             cached_cube_mesh: None,
             cached_sphere_mesh: None,
+            textures_cache: HashMap::new(),
+            gltf_cache: HashMap::new(),
         }
     }
 
@@ -361,6 +367,8 @@ impl Engine {
             color: mat.color,
             physics: *phys,
             shader: mat.shader,
+            base_color_texture: mat.base_color_texture,
+            metallic_roughness_texture: mat.metallic_roughness_texture,
             ..Default::default()
         };
         self.scene
@@ -379,32 +387,97 @@ impl Engine {
     /// * `mat` - Material properties to apply to all meshes
     /// * `phys` - Physics properties for collision simulation
     /// * `path` - Path to the .gltf or .glb file
-    pub fn add_gltf(&mut self, transform: Transform, mat: &Material, phys: &Physics, path: &str) {
-        let (objects, textures) = load_gltf_scene(&self.memory_allocator, path);
+    pub fn load_texture(&mut self, path: &str) -> usize {
+        if let Some(&id) = self.textures_cache.get(path) {
+            return id;
+        }
+
+        // Load image using the image crate
+        let img = image::open(path)
+            .unwrap_or_else(|e| panic!("Failed to load texture {}: {}", path, e))
+            .into_rgba8();
+        let width = img.width();
+        let height = img.height();
+
+        let tex = crate::scene::object::Texture {
+            width,
+            height,
+            pixels: img.into_raw(),
+        };
 
         let base_texture_count = self.scene.lock().unwrap().texture_views.len();
-
         let pipeline = self.registry.default_pipeline();
+
         self.scene.lock().unwrap().set_textures(
             &pipeline,
-            &textures,
+            &[tex],
             &self.base.queue,
             &self.memory_allocator,
         );
 
-        for (mut mesh, mut instance) in objects {
-            if let Some(tex_idx) = mesh.base_color_texture {
-                mesh.base_color_texture = Some(tex_idx + base_texture_count);
+        self.textures_cache.insert(path.to_string(), base_texture_count);
+        base_texture_count
+    }
+
+    /// Adds a GLTF model to the scene.
+    ///
+    /// Loads a 3D model from a GLTF file and adds all its meshes as instances.
+    /// Textures from the model are automatically uploaded and assigned indices.
+    ///
+    /// # Arguments
+    /// * `transform` - Position, rotation, scale of the model
+    /// * `mat` - Material properties to apply to all meshes
+    /// * `phys` - Physics properties for collision simulation
+    /// * `path` - Path to the .gltf or .glb file
+    pub fn add_gltf(&mut self, transform: Transform, mat: &Material, phys: &Physics, path: &str) {
+        if !self.gltf_cache.contains_key(path) {
+            let (mut objects, textures) = load_gltf_scene(&self.memory_allocator, path);
+            let base_texture_count = self.scene.lock().unwrap().texture_views.len();
+            let pipeline = self.registry.default_pipeline();
+            
+            if !textures.is_empty() {
+                self.scene.lock().unwrap().set_textures(
+                    &pipeline,
+                    &textures,
+                    &self.base.queue,
+                    &self.memory_allocator,
+                );
             }
-            if let Some(tex_idx) = mesh.metallic_roughness_texture {
-                mesh.metallic_roughness_texture = Some(tex_idx + base_texture_count);
+
+            for (mesh, instance) in &mut objects {
+                if let Some(tex_idx) = instance.base_color_texture {
+                    instance.base_color_texture = Some(tex_idx + base_texture_count);
+                }
+                if let Some(tex_idx) = instance.metallic_roughness_texture {
+                    instance.metallic_roughness_texture = Some(tex_idx + base_texture_count);
+                }
             }
+            self.gltf_cache.insert(path.to_string(), objects);
+        }
+
+        let objects = self.gltf_cache.get(path).unwrap().clone();
+        
+        for (mesh, mut instance) in objects {
+            // Apply new transform onto the base model transform
             let transform_matrix = Matrix4::from(transform.to_matrix());
             let instance_matrix = Matrix4::from(instance.model_matrix);
             let combined_matrix = transform_matrix * instance_matrix;
             instance.model_matrix = combined_matrix.into();
             instance.physics = *phys;
             instance.shader = mat.shader;
+            
+            // Allow override of material properties and textures
+            instance.color = mat.color;
+            instance.roughness = mat.roughness;
+            instance.metalness = mat.metalness;
+            instance.emissive = mat.emissive;
+            if mat.base_color_texture.is_some() {
+                instance.base_color_texture = mat.base_color_texture;
+            }
+            if mat.metallic_roughness_texture.is_some() {
+                instance.metallic_roughness_texture = mat.metallic_roughness_texture;
+            }
+
             self.scene
                 .lock()
                 .unwrap()

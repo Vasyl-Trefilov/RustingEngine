@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.43] - 2026-04-11
+
+### Added
+
+- Textures can be applied on engine build in shapes
+
+### Fixed
+
+- Now textures can be reused to save VRAM
+
 ## [0.1.42] - 2026-04-11
 
 ### Added

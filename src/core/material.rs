@@ -45,6 +45,12 @@ pub struct Material {
 
     /// Which shader program to use for rendering this material
     pub shader: ShaderType,
+
+    /// Optional texture ID for the base color/albedo map
+    pub base_color_texture: Option<usize>,
+
+    /// Optional texture ID for the metallic/roughness map
+    pub metallic_roughness_texture: Option<usize>,
 }
 
 impl Default for Material {
@@ -55,6 +61,8 @@ impl Default for Material {
             roughness: 0.5,
             metalness: 0.0,
             shader: ShaderType::Pbr,
+            base_color_texture: None,
+            metallic_roughness_texture: None,
         }
     }
 }
@@ -100,6 +108,8 @@ pub struct MaterialBuilder {
     roughness: f32,
     metalness: f32,
     shader: ShaderType,
+    base_color_texture: Option<usize>,
+    metallic_roughness_texture: Option<usize>,
 }
 
 impl MaterialBuilder {
@@ -213,6 +223,18 @@ impl MaterialBuilder {
         self
     }
 
+    /// Sets the base color texture ID.
+    pub fn base_color_texture(mut self, tex_id: usize) -> Self {
+        self.base_color_texture = Some(tex_id);
+        self
+    }
+
+    /// Sets the metallic/roughness texture ID.
+    pub fn metallic_roughness_texture(mut self, tex_id: usize) -> Self {
+        self.metallic_roughness_texture = Some(tex_id);
+        self
+    }
+
     /// Finalizes the builder and creates the [`Material`].
     ///
     /// # Example
@@ -230,6 +252,8 @@ impl MaterialBuilder {
             roughness: self.roughness,
             metalness: self.metalness,
             shader: self.shader,
+            base_color_texture: self.base_color_texture,
+            metallic_roughness_texture: self.metallic_roughness_texture,
         }
     }
 }

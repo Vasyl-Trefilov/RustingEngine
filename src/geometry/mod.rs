@@ -60,8 +60,6 @@ pub struct Mesh {
     pub indices: Option<Subbuffer<[u32]>>,       // Optional index buffer (for reuse)
     pub vertex_count: u32,                       // Number of vertices
     pub index_count: u32,                        // Number of indices (if using)
-    pub base_color_texture: Option<usize>,
-    pub metallic_roughness_texture: Option<usize>,
 }
 
 impl Mesh {
@@ -113,8 +111,6 @@ impl Mesh {
             indices: index_buffer,
             vertex_count,
             index_count,
-            base_color_texture: None,
-            metallic_roughness_texture: None,
         }
     }
 

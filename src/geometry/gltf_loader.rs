@@ -95,8 +95,6 @@ fn process_node(
 
                 index
             });
-            mesh.base_color_texture = base_color_texture;
-
             let instance = Instance {
                 model_matrix: Transform::from_matrix(global_transform).to_matrix(),
                 color,

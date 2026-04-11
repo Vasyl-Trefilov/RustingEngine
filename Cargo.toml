@@ -1,6 +1,6 @@
 [package]
 name = "rusting_engine"
-version = "0.1.42"
+version = "0.1.43"
 authors = ["Vasyl Trefilov <drenfor228@gmail.com>"]
 edition = "2021"
 description = "A high-performance Vulkano-based 3D engine with GPU physics."
@@ -29,6 +29,7 @@ rayon = "1.10"
 gltf = "1.4.1"
 smallvec = "1.15.1"
 cgmath = "0.18.0"
+image = "0.25.10"
 
 [profile.release]
 opt-level = 3
@@ -41,3 +42,7 @@ exclude = ["testModels/*", "AGENTS.md", "plan.md", "benchmark/"]
 [[example]]
 name = "gltf_test"
 path = "src/examples/gltf_test.rs"
+
+[[example]]
+name = "native_texture"
+path = "src/examples/native_texture.rs"

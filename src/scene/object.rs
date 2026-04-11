@@ -176,6 +176,8 @@ impl std::ops::Mul for Transform {
 
 pub struct RenderBatch {
     pub mesh: Mesh,
+    pub base_color_texture: Option<usize>,
+    pub metallic_roughness_texture: Option<usize>,
     pub instances: Vec<Instance>,
     pub shader: ShaderType,
     pub compute_shader: ComputeShaderType,
