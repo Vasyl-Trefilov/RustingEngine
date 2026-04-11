@@ -1,9 +1,9 @@
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 //! This is a test file, where I test the user-friendliness of my library
 mod examples;
 use crate::examples::stress_pbr::main as pbr_main;
-
+use crate::examples::gltf_test::main as gltf_main;
 fn main() {
     // Comment out the function you don't want to run, and uncomment the one you do!
 
@@ -16,4 +16,6 @@ fn main() {
 
     // rotate test
     // rotate_main();
+
+    // gltf_main();
 }

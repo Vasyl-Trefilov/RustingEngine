@@ -1,3 +1,27 @@
+//! High-level game engine API for the rendering engine.
+//!
+//! This module provides the main `Engine` struct that wraps all low-level Vulkan
+//! complexity into a simple, easy-to-use API. It handles:
+//!
+//! - Window creation and event handling via Winit
+//! - Vulkan initialization and swapchain management
+//! - Scene management (adding cubes, spheres, GLTF models)
+//! - Camera controls with keyboard/mouse input
+//! - Physics simulation loop at fixed timestep
+//! - Rendering with optional frustum culling
+//!
+//! # Quick Start
+//!
+//! ```ignore
+//! let mut engine = Engine::new("My Game");
+//! engine.add_cube(
+//!     Transform { position: [0.0, 0.0, 0.0], ..Default::default() },
+//!     &Material::standard().build(),
+//!     &Physics::default()
+//! );
+//! engine.run();
+//! ```
+
 use crate::core::{Material, Physics, Transform};
 use crate::geometry::gltf_loader::load_gltf_scene;
 use crate::geometry::shapes::{create_cube, create_sphere_subdivided};
@@ -10,6 +34,7 @@ use crate::rendering::swapchain::{create_framebuffers, create_render_pass};
 use crate::rendering::VulkanBase;
 use crate::scene::object::Instance;
 use crate::scene::{begin_render_pass_only, record_compute_physics_multi, RenderScene};
+use nalgebra::Matrix4;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -32,17 +57,35 @@ use vulkano::swapchain::{
 };
 use vulkano::sync::{self, FlushError};
 
+/// Perspective camera for 3D rendering.
+///
+/// Controls the view matrix based on position, yaw/pitch angles, and handles
+/// keyboard input for WASD movement and mouse look.
 pub struct PerspectiveCamera {
+    /// Camera position in world space (X, Y, Z)
     pub position: [f32; 3],
+    /// Horizontal rotation angle in radians
     pub yaw: f32,
+    /// Vertical rotation angle in radians
     pub pitch: f32,
+    /// Field of view in radians
     pub fov: f32,
+    /// Aspect ratio (width / height)
     pub aspect: f32,
+    /// Near clipping plane distance
     pub near: f32,
+    /// Far clipping plane distance
     pub far: f32,
 }
 
 impl PerspectiveCamera {
+    /// Creates a new perspective camera with default position and orientation.
+    ///
+    /// # Arguments
+    /// * `fov` - Vertical field of view in degrees
+    /// * `aspect` - Aspect ratio (width / height)
+    /// * `near` - Near clipping plane
+    /// * `far` - Far clipping plane
     pub fn new(fov: f32, aspect: f32, near: f32, far: f32) -> Self {
         Self {
             position: [0.0, 5.0, 20.0],
@@ -55,6 +98,19 @@ impl PerspectiveCamera {
         }
     }
 
+    /// Updates camera position and orientation based on keyboard/mouse input.
+    ///
+    /// Handles WASD movement, Space/LControl for vertical movement, and mouse
+    /// look when the mouse is captured. Returns the view matrix.
+    ///
+    /// # Arguments
+    /// * `keys` - Set of currently pressed keys
+    /// * `sprint` - Movement speed multiplier (2.0 for sprint, 1.0 for normal)
+    /// * `dt` - Time since last frame in seconds
+    /// * `mouse_captured` - Whether mouse look is active
+    ///
+    /// # Returns
+    /// The view matrix transforming world coordinates to camera space
     pub fn update(
         &mut self,
         keys: &HashSet<VirtualKeyCode>,
@@ -117,24 +173,45 @@ impl PerspectiveCamera {
 /// Handles Vulkan context, swapchain, render pass, rendering pipeline, inputs,
 /// and the physics simulation loop.
 pub struct Engine {
+    /// The camera - controls view matrix and receives input
     pub camera: Arc<Mutex<PerspectiveCamera>>,
+    /// The render scene - holds all objects, batches, and GPU resources
     scene: Arc<Mutex<RenderScene>>,
+    /// Winit event loop - takes ownership when run() is called
     event_loop: Option<EventLoop<()>>,
+    /// Base Vulkan resources (device, queue, window, surface)
     base: VulkanBase,
+    /// Vulkan swapchain - manages presentation
     swapchain: Arc<Swapchain>,
+    /// Swapchain images - the render targets
     images: Vec<Arc<vulkano::image::SwapchainImage>>,
+    /// Render pass - defines the rendering pipeline stages
     render_pass: Arc<vulkano::render_pass::RenderPass>,
+    /// Graphics shader registry - maps shader types to pipelines
     registry: ShaderRegistry,
+    /// Compute shader registry - maps physics types to pipelines
     compute_registry: ComputeShaderRegistry,
+    /// Memory allocator for GPU buffers
     memory_allocator: Arc<vulkano::memory::allocator::StandardMemoryAllocator>,
+    /// Descriptor set allocator for pipeline resources
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+    /// Command buffer allocator - manages GPU command buffers
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    /// Cached cube mesh - reused for all cube instances
     cached_cube_mesh: Option<crate::geometry::Mesh>,
+    /// Cached sphere mesh - reused for all sphere instances
     cached_sphere_mesh: Option<crate::geometry::Mesh>,
 }
 
 impl Engine {
     /// Creates a new Engine and initializes Vulkan, Winit, and rendering pipelines.
+    ///
+    /// This sets up:
+    /// - Window and Vulkan device/queue
+    /// - Swapchain and render pass
+    /// - Shader registries (graphics and compute)
+    /// - Memory and descriptor set allocators
+    /// - Empty scene ready for objects
     ///
     /// # Arguments
     /// * `title` - The window title.
@@ -209,25 +286,27 @@ impl Engine {
         }
     }
 
-    /// Set the sun in scene
+    /// Sets the main light source in the scene.
+    ///
+    /// This configures the directional/point light used for shading.
+    ///
+    /// # Arguments
+    /// * `pos` - Light position in world space (X, Y, Z)
+    /// * `color` - Light color as RGB values (typically 0.0-1.0)
+    /// * `intensity` - Light brightness multiplier
     pub fn set_light(&mut self, pos: [f32; 3], color: [f32; 3], intensity: f32) {
         self.scene.lock().unwrap().set_light(pos, color, intensity);
     }
 
-    /// Adding a cube to the scene.
+    /// Adds a cube to the scene.
     ///
-    /// # Example
-    /// ```
-    /// engine.add_cube(
-    ///    Transform {
-    ///        ..Default::default()
-    ///    },
-    ///    &Material::standard()
-    ///        .build(),
-    ///    &Physics::default()
-    ///        .collision(0.2), // type, if collision < 0.5 => Box, collision > 0.5 => Sphere
-    ///    );
-    /// ```
+    /// Creates a cube mesh with the given transform, material, and physics properties.
+    /// The mesh is cached and reused for all subsequent cube additions.
+    ///
+    /// # Arguments
+    /// * `transform` - Position, rotation, and scale of the cube
+    /// * `mat` - Material properties (color, shader, roughness, metalness)
+    /// * `phys` - Physics properties (collision type, mass, bounciness, etc.)
     pub fn add_cube(&mut self, transform: Transform, mat: &Material, phys: &Physics) {
         // Cache mesh on first use, then reuse
         let mesh = if let Some(cached) = &self.cached_cube_mesh {
@@ -251,20 +330,16 @@ impl Engine {
             .add_instance(mesh, inst, &self.memory_allocator);
     }
 
-    /// Adding a sphere to the scene.
+    /// Adds a sphere to the scene.
     ///
-    /// # Example
-    /// ```
-    /// engine.add_sphere(
-    ///    Transform {
-    ///        ..Default::default()
-    ///    },
-    ///    &Material::standard()
-    ///        .build(),
-    ///    &Physics::default()
-    ///        .collision(0.8), // type, if collision < 0.5 => Box, collision > 0.5 => Sphere
-    ///    );
-    /// ```
+    /// Creates a sphere mesh with the given transform, material, and physics properties.
+    /// The mesh is cached and reused for all subsequent sphere additions.
+    ///
+    /// # Arguments
+    /// * `transform` - Position, rotation, and scale of the sphere
+    /// * `mat` - Material properties (color, shader, roughness, metalness)
+    /// * `phys` - Physics properties (collision type, mass, bounciness, etc.)
+    /// * `subdiv` - Number of subdivisions (higher = smoother sphere, costs more)
     pub fn add_sphere(
         &mut self,
         transform: Transform,
@@ -294,6 +369,16 @@ impl Engine {
             .add_instance(mesh, inst, &self.memory_allocator);
     }
 
+    /// Adds a GLTF model to the scene.
+    ///
+    /// Loads a 3D model from a GLTF file and adds all its meshes as instances.
+    /// Textures from the model are automatically uploaded and assigned indices.
+    ///
+    /// # Arguments
+    /// * `transform` - Position, rotation, scale of the model
+    /// * `mat` - Material properties to apply to all meshes
+    /// * `phys` - Physics properties for collision simulation
+    /// * `path` - Path to the .gltf or .glb file
     pub fn add_gltf(&mut self, transform: Transform, mat: &Material, phys: &Physics, path: &str) {
         let (objects, textures) = load_gltf_scene(&self.memory_allocator, path);
 
@@ -311,7 +396,13 @@ impl Engine {
             if let Some(tex_idx) = mesh.base_color_texture {
                 mesh.base_color_texture = Some(tex_idx + base_texture_count);
             }
-            instance.model_matrix = transform.to_matrix();
+            if let Some(tex_idx) = mesh.metallic_roughness_texture {
+                mesh.metallic_roughness_texture = Some(tex_idx + base_texture_count);
+            }
+            let transform_matrix = Matrix4::from(transform.to_matrix());
+            let instance_matrix = Matrix4::from(instance.model_matrix);
+            let combined_matrix = transform_matrix * instance_matrix;
+            instance.model_matrix = combined_matrix.into();
             instance.physics = *phys;
             instance.shader = mat.shader;
             self.scene
@@ -320,30 +411,54 @@ impl Engine {
                 .add_instance(mesh.clone(), instance, &self.memory_allocator);
         }
     }
-    /// Set a scene-wide shader override. All objects will use this shader.
+
+    /// Sets a scene-wide graphics shader override.
+    ///
+    /// All objects will use the specified shader instead of their per-object shader.
+    /// Useful for post-processing effects or uniform visual style.
+    ///
+    /// # Arguments
+    /// * `shader` - The shader type to use for all objects
     pub fn set_scene_shader(&mut self, shader: ShaderType) {
         self.registry.set_scene_shader(shader);
     }
 
-    /// Clear the scene-wide shader override. Objects will use their per-object shader.
+    /// Clears the scene-wide graphics shader override.
+    ///
+    /// Objects will revert to using their individual per-object shader.
     pub fn clear_scene_shader(&mut self) {
         self.registry.clear_scene_shader();
     }
 
-    /// Set a scene-wide shader override. All objects will use this shader.
+    /// Sets a scene-wide physics shader override.
+    ///
+    /// All objects will use the specified physics simulation instead of their
+    /// per-object physics type. Useful for testing different physics behaviors.
+    ///
+    /// # Arguments
+    /// * `shader` - The compute shader type to use for physics
     pub fn set_scene_physic(&mut self, shader: ComputeShaderType) {
         self.compute_registry.set_scene_shader(shader);
     }
 
-    /// Clear the scene-wide shader override. Objects will use their per-object shader.
+    /// Clears the scene-wide physics shader override.
+    ///
+    /// Objects will revert to using their individual per-object physics type.
     pub fn clear_scene_physic(&mut self) {
         self.compute_registry.clear_scene_shader();
     }
 
-    /// Starts the engine's main loop.
+    /// Starts the engine's main game loop.
     ///
-    /// This method will block the current thread until the window is closed.
-    /// It handles event dispatch, physics update intervals, and issues continuous draw calls.
+    /// This method blocks until the window is closed. It handles:
+    /// - Window events (resize, close, keyboard, mouse)
+    /// - Physics simulation at fixed 60 FPS timestep
+    /// - Optional frustum culling via compute shader
+    /// - Rendering with triple-buffered frames
+    ///
+    /// Press Escape to capture/release mouse for camera look.
+    /// Press C to toggle frustum culling.
+    /// Hold Shift to sprint.
     pub fn run(mut self) {
         eprintln!("[DBG] run() start");
         eprintln!("[DBG] starting upload");
@@ -822,9 +937,14 @@ impl Engine {
     }
 }
 
+/// Tracks keyboard and mouse input state for the current frame.
+/// Used internally by the engine to handle user input.
 #[derive(Default)]
 struct InputState {
+    /// Set of currently pressed keyboard keys
     keys: HashSet<VirtualKeyCode>,
+    /// Whether the mouse is captured (for camera look)
     mouse_captured: bool,
+    /// Whether frustum culling is enabled
     cull_enabled: bool,
 }

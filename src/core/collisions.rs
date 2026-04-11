@@ -4,12 +4,11 @@ pub enum CollisionType {
     /// The best for performance
     #[default]
     Sphere,
-    /// Box collision. More heavy for GPU, if you can use sphere, I recommend to avoid using Box 
+    /// Box collision. More heavy for GPU, if you can use sphere, I recommend to avoid using Box
     Box,
 }
 
 impl CollisionType {
-
     /// This function return number for collision type that will be used in shaders
     pub fn sort_key(&self) -> f32 {
         match self {

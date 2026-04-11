@@ -97,8 +97,8 @@ impl ShaderRegistry {
             create_pipeline(vs_module.clone(), fs_normal_mod, render_pass, device),
         );
 
-        let fs_heavy_mod = fs_heavy::load(device.clone())
-            .expect("Failed to load Heavy fragment shader");
+        let fs_heavy_mod =
+            fs_heavy::load(device.clone()).expect("Failed to load Heavy fragment shader");
         pipelines.insert(
             ShaderType::Heavy,
             create_pipeline(vs_module, fs_heavy_mod, render_pass, device),

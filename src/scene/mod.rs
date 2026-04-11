@@ -1,3 +1,16 @@
+//! Scene management module for the rendering engine.
+//!
+//! This module handles the creation, management, and rendering of 3D scenes.
+//! It provides structures for managing render batches, instances, physics data,
+//! and GPU buffers. The scene system supports instanced rendering with
+//! GPU-accelerated physics simulation via compute shaders.
+//!
+//! Key components:
+//! - `RenderScene`: Main scene container holding all renderable objects
+//! - `RenderBatch`: Groups instances sharing the same mesh and shader
+//! - `Instance`: Individual object with transform, material, and physics properties
+//! - Compute dispatch system for parallel physics simulation
+
 pub mod animation;
 pub mod object;
 
@@ -36,52 +49,106 @@ use crate::rendering::shader_registry::{ShaderRegistry, ShaderType};
 use crate::scene::object::{Instance, InstanceData, RenderBatch, Texture};
 use vulkano::command_buffer::DrawIndexedIndirectCommand;
 
+/// Push constants for mesh rendering.
+/// These are passed directly to the shader for per-draw configuration.
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct MeshPushConstants {
+    /// Offset into the visible list for culling - determines where to start reading instance indices
     pub visible_list_offset: u32,
-    pub use_culling: u32, // 0 = direct, 1 = indirect
+    /// Culling mode: 0 = draw all instances directly, 1 = use indirect drawing with culling
+    pub use_culling: u32,
 }
 
+/// Information needed to dispatch a compute shader.
+/// Contains the shader type, which instances to process, and how many.
 pub struct ComputeDispatchInfo {
+    /// Which compute shader to use for this batch
     pub compute_shader: ComputeShaderType,
+    /// Starting offset in the instance buffer for this batch
     pub offset: u32,
+    /// Number of instances this shader should process
     pub count: u32,
 }
 
+/// Main scene container that holds all renderable objects and GPU resources.
+///
+/// The scene manages:
+/// - Render batches (groups of instances with same mesh/shader)
+/// - Frame data (one set per frame in flight)
+/// - Texture resources and samplers
+/// - Physics buffers (read/write for ping-pong updates)
+/// - Spatial grid structures for collision detection
 pub struct RenderScene {
-    // pub max_instances: usize,
+    /// All render batches in the scene - each batch shares mesh geometry and shader
     pub batches: Vec<RenderBatch>,
+    /// Per-frame data for double/triple buffering - holds uniform buffers
     pub frames: Vec<FrameData>,
+    /// Position of the main light source in world space
     pub light_pos: [f32; 3],
+    /// RGB color of the light
     pub light_color: [f32; 3],
+    /// Brightness multiplier for the light
     pub light_intensity: f32,
+    /// Image views for all textures in the scene
     pub texture_views: Vec<Arc<ImageView<ImmutableImage>>>,
+    /// Sampler used to sample textures - handles filtering and addressing modes
     pub texture_sampler: Arc<Sampler>,
+    /// Allocator for descriptor sets - manages GPU memory for descriptors
     pub descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+    /// Cached descriptor sets organized by frame and texture index
     pub descriptor_sets: Vec<Vec<Arc<PersistentDescriptorSet>>>,
+    /// Physics state buffer read by compute shaders - contains instance transforms/velocities
     pub physics_read: Subbuffer<[InstanceData]>,
+    /// Physics state buffer written by compute shaders - double-buffered with physics_read
     pub physics_write: Subbuffer<[InstanceData]>,
+    /// Indices of objects classified as "large" - need special collision handling
     pub big_objects_indices: Subbuffer<[u32]>,
+    /// Number of large objects currently in the scene
     pub num_big_objects: u32,
+    /// Count of objects in each grid cell - used for spatial partitioning
     pub grid_counts: Subbuffer<[u32]>,
+    /// List of object indices organized by grid cell - enables fast spatial queries
     pub grid_objects: Subbuffer<[u32]>,
+    /// Indices of instances that passed visibility test - used by culling
     pub visible_indices: Subbuffer<[u32]>,
+    /// Total number of instances across all batches
     pub total_instances: u32,
+    /// Maximum radius of small objects - used to calculate grid cell size
     pub max_object_radius: f32,
 }
 
+/// Per-frame data storage.
+/// Each frame in flight has its own uniform buffer for view/projection matrices.
 pub struct FrameData {
+    /// Uniform buffer containing view matrix, projection matrix, camera position, and light data
     pub uniform_buffer: Subbuffer<UniformBufferObject>,
 }
 
+/// Handle to a specific instance in the scene.
+/// Used to remove or modify instances after they've been added.
 #[derive(Clone, Copy)]
 pub struct InstanceHandle {
+    /// Index of the batch containing this instance
     pub batch_index: usize,
+    /// Index of this instance within its batch
     pub instance_index: usize,
 }
 
 impl RenderScene {
+    /// Adds a new instance to the scene.
+    ///
+    /// The instance is placed into an existing batch if one exists with matching
+    /// mesh and shader, otherwise a new batch is created. Returns a handle that
+    /// can be used to remove or modify the instance later.
+    ///
+    /// # Arguments
+    /// * `mesh` - The mesh geometry for this instance
+    /// * `instance` - The instance data including transform, material, and physics
+    /// * `allocator` - Memory allocator for creating buffers
+    ///
+    /// # Returns
+    /// An `InstanceHandle` that references this instance in the scene
     pub fn add_instance(
         &mut self,
         mesh: Mesh,
@@ -90,10 +157,14 @@ impl RenderScene {
     ) -> InstanceHandle {
         let shader = instance.shader;
         let compute_shader = instance.physics.compute_shader;
+        let base_color_texture = mesh.base_color_texture;
+        let metallic_roughness_texture = mesh.metallic_roughness_texture;
         for (batch_index, batch) in self.batches.iter_mut().enumerate() {
             if batch.mesh.vertices.buffer() == mesh.vertices.buffer()
                 && batch.shader == shader
                 && batch.compute_shader == compute_shader
+                && batch.mesh.base_color_texture == base_color_texture
+                && batch.mesh.metallic_roughness_texture == metallic_roughness_texture
             {
                 batch.instances.push(instance);
 
@@ -109,7 +180,7 @@ impl RenderScene {
             shader,
             compute_shader,
             instances: vec![instance],
-            base_instance_offset: 0,
+            base_instance_offset: self.total_instances,
             indirect_buffer: Buffer::new_slice::<DrawIndexedIndirectCommand>(
                 allocator,
                 BufferCreateInfo {
@@ -133,6 +204,13 @@ impl RenderScene {
         }
     }
 
+    /// Removes an instance from the scene using its handle.
+    ///
+    /// The instance is removed from its batch. If the batch becomes empty,
+    /// the batch is also removed. Uses swap-remove for efficiency.
+    ///
+    /// # Arguments
+    /// * `handle` - The handle returned by `add_instance`
     pub fn remove_instance(&mut self, handle: InstanceHandle) {
         if let Some(batch) = self.batches.get_mut(handle.batch_index) {
             if handle.instance_index < batch.instances.len() {
@@ -145,6 +223,25 @@ impl RenderScene {
         }
     }
 
+    /// Creates a new render scene with all required GPU resources.
+    ///
+    /// This initializes:
+    /// - Default white texture (used when no texture is specified)
+    /// - Texture sampler with linear filtering
+    /// - Physics buffers (double-buffered for ping-pong updates)
+    /// - Spatial grid structures for collision detection
+    /// - Per-frame uniform buffers
+    ///
+    /// # Arguments
+    /// * `memory_allocator` - For creating GPU buffers
+    /// * `descriptor_set_allocator` - For creating descriptor sets
+    /// * `_pipeline` - Graphics pipeline (unused, kept for compatibility)
+    /// * `queue` - Queue family to execute commands on
+    /// * `frames_in_flight` - Number of frames to buffer (usually 2 or 3)
+    /// * `max_instances` - Maximum number of instances supported
+    ///
+    /// # Returns
+    /// A new `RenderScene` ready to receive instances
     pub fn new(
         memory_allocator: &Arc<StandardMemoryAllocator>,
         descriptor_set_allocator: &Arc<StandardDescriptorSetAllocator>,
@@ -299,6 +396,22 @@ impl RenderScene {
         }
     }
 
+    /// Uploads all instance data to GPU memory and prepares for rendering.
+    ///
+    /// This function:
+    /// 1. Gathers all instance data from batches into a flat array
+    /// 2. Classifies objects as "big" or "small" based on radius
+    /// 3. Copies data to physics buffers via staging buffers
+    /// 4. Updates indirect draw buffers for each batch
+    /// 5. Returns compute dispatch info for physics simulation
+    ///
+    /// # Arguments
+    /// * `allocator` - Memory allocator for staging buffers
+    /// * `queue` - Queue to execute transfer commands
+    /// * `compute_registry` - Registry of compute shaders
+    ///
+    /// # Returns
+    /// Vector of `ComputeDispatchInfo` describing each compute shader dispatch
     pub fn upload_to_gpu(
         &mut self,
         allocator: &Arc<StandardMemoryAllocator>,
@@ -320,6 +433,12 @@ impl RenderScene {
         if override_shader.is_none() {
             self.batches
                 .sort_by_key(|b| (b.compute_shader.sort_key(), b.shader.sort_key()));
+        }
+
+        let mut current_offset = 0;
+        for batch in &mut self.batches {
+            batch.base_instance_offset = current_offset;
+            current_offset += batch.instances.len() as u32;
         }
 
         let mut flat_data = Vec::with_capacity(total_instances);
@@ -423,7 +542,7 @@ impl RenderScene {
                 instance_count: batch.instances.len() as u32,
                 first_index: 0,
                 vertex_offset: 0,
-                first_instance: 0,
+                first_instance: batch.base_instance_offset,
             });
         }
 
@@ -447,7 +566,7 @@ impl RenderScene {
                 instance_count: batch.instances.len() as u32,
                 first_index: 0,
                 vertex_offset: 0,
-                first_instance: 0,
+                first_instance: batch.base_instance_offset,
             };
             let single_staging = Buffer::from_iter(
                 allocator,
@@ -512,21 +631,29 @@ impl RenderScene {
             }]
         } else {
             let mut dispatches = Vec::new();
-            let mut current_offset = 0;
-            for batch in &mut self.batches {
+            for batch in &self.batches {
                 let count = batch.instances.len() as u32;
-                batch.base_instance_offset = current_offset;
-                dispatches.push(ComputeDispatchInfo {
-                    compute_shader: batch.compute_shader,
-                    offset: current_offset,
-                    count,
-                });
-                current_offset += count;
+                if count > 0 {
+                    dispatches.push(ComputeDispatchInfo {
+                        compute_shader: batch.compute_shader,
+                        offset: batch.base_instance_offset,
+                        count,
+                    });
+                }
             }
             dispatches
         }
     }
 
+    /// Ensures descriptor sets are created and cached for all textures.
+    ///
+    /// Descriptor sets bind uniform buffers, textures, and physics buffers
+    /// to graphics pipeline slots. Creates read (physics_read) and write
+    /// (physics_write) versions for each texture to support ping-pong.
+    ///
+    /// # Arguments
+    /// * `pipeline` - The graphics pipeline to create descriptor sets for
+    /// * `target_tex_count` - Number of textures to create sets for
     pub fn ensure_descriptor_cache(
         &mut self,
         pipeline: &Arc<GraphicsPipeline>,
@@ -655,12 +782,14 @@ impl RenderScene {
                 last_shader = Some(effective_shader);
             }
 
+            let effective_culling = use_culling && batch.mesh.indices.is_some();
+
             builder.push_constants(
                 pipeline.layout().clone(),
                 0,
                 MeshPushConstants {
                     visible_list_offset: batch.base_instance_offset,
-                    use_culling: if use_culling { 1 } else { 0 },
+                    use_culling: if effective_culling { 1 } else { 0 },
                 },
             );
 
@@ -679,7 +808,7 @@ impl RenderScene {
             if let Some(indices) = &batch.mesh.indices {
                 builder.bind_index_buffer(indices.clone());
 
-                if use_culling {
+                if effective_culling {
                     builder
                         .draw_indexed_indirect(batch.indirect_buffer.clone())
                         .unwrap();
@@ -706,6 +835,17 @@ impl RenderScene {
             }
         }
     }
+
+    /// Updates the uniform buffer with camera and light data for a specific frame.
+    ///
+    /// Call this each frame before rendering to update the view/projection
+    /// matrices and camera position in the GPU uniform buffer.
+    ///
+    /// # Arguments
+    /// * `frame_index` - Which frame in flight to update
+    /// * `view` - View matrix (camera transformation)
+    /// * `proj` - Projection matrix (perspective transformation)
+    /// * `eye_pos` - Camera position in world space
     pub fn prepare_frame_ubo(
         &mut self,
         frame_index: usize,
@@ -722,6 +862,20 @@ impl RenderScene {
         ubo.light_intensity = self.light_intensity;
     }
 
+    /// Creates a GPU texture from raw RGBA pixel data.
+    ///
+    /// This creates an immutable image and uploads it to GPU memory.
+    /// The image is uploaded via a one-time command buffer.
+    ///
+    /// # Arguments
+    /// * `memory_allocator` - For creating the image
+    /// * `queue` - Queue to execute the upload command
+    /// * `pixels_rgba` - Raw RGBA pixel data (4 bytes per pixel)
+    /// * `width` - Image width in pixels
+    /// * `height` - Image height in pixels
+    ///
+    /// # Returns
+    /// The created immutable image wrapped in Arc
     fn create_texture_image(
         memory_allocator: &Arc<StandardMemoryAllocator>,
         queue: &Arc<Queue>,
@@ -763,6 +917,16 @@ impl RenderScene {
         image
     }
 
+    /// Converts a Texture to RGBA8 format.
+    ///
+    /// Handles both RGBA (4 bytes/pixel) and RGB (3 bytes/pixel) input.
+    /// If the format is neither, returns a white texture.
+    ///
+    /// # Arguments
+    /// * `tex` - Input texture in any supported format
+    ///
+    /// # Returns
+    /// Vector of RGBA8 bytes (4 bytes per pixel)
     fn to_rgba8(tex: &Texture) -> Vec<u8> {
         match tex.pixels.len() as u32 {
             len if len == tex.width * tex.height * 4 => tex.pixels.clone(),
@@ -777,6 +941,16 @@ impl RenderScene {
         }
     }
 
+    /// Adds custom textures to the scene.
+    ///
+    /// Each texture is uploaded to GPU memory and an image view is created.
+    /// Also rebuilds the descriptor cache to include the new textures.
+    ///
+    /// # Arguments
+    /// * `pipeline` - Graphics pipeline for descriptor set creation
+    /// * `textures` - Array of textures to add
+    /// * `queue` - Queue for upload commands
+    /// * `memory_allocator` - For creating GPU resources
     pub fn set_textures(
         &mut self,
         pipeline: &Arc<GraphicsPipeline>,
@@ -802,6 +976,12 @@ impl RenderScene {
         self.ensure_descriptor_cache(pipeline, self.texture_views.len());
     }
 
+    /// Sets the main light source parameters.
+    ///
+    /// # Arguments
+    /// * `position` - Light position in world space (XYZ)
+    /// * `color` - Light color as RGB values
+    /// * `intensity` - Light brightness multiplier
     pub fn set_light(&mut self, position: [f32; 3], color: [f32; 3], intensity: f32) {
         self.light_pos = position;
         self.light_color = color;
@@ -809,6 +989,19 @@ impl RenderScene {
     }
 }
 
+/// Records a single compute shader dispatch for physics simulation.
+///
+/// This is the simple version that dispatches one compute shader type
+/// to process all instances. Used when all objects share the same physics behavior.
+///
+/// # Arguments
+/// * `builder` - Command buffer to record the dispatch to
+/// * `compute_pipeline` - The compute pipeline to use
+/// * `compute_set` - Descriptor set with physics buffers
+/// * `max_instances` - Maximum instances the buffer can hold
+/// * `dt` - Delta time since last frame (seconds)
+/// * `total_objects` - Number of active objects
+/// * `num_big_objects` - Count of large objects requiring special handling
 pub fn record_compute_physics(
     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     compute_pipeline: &Arc<vulkano::pipeline::ComputePipeline>,

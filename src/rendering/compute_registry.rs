@@ -107,7 +107,8 @@ impl ComputeShaderRegistry {
         pipelines.insert(ComputeShaderType::FullPhysics, cp_full);
 
         // Mid physics
-        let cs_mid = cs_no_rot::load(device.clone()).expect("Failed to load MidPhysics compute shader");
+        let cs_mid =
+            cs_no_rot::load(device.clone()).expect("Failed to load MidPhysics compute shader");
         let cp_mid = ComputePipeline::new(
             device.clone(),
             cs_mid.entry_point("main").unwrap(),
@@ -131,8 +132,8 @@ impl ComputeShaderRegistry {
         pipelines.insert(ComputeShaderType::Static, cp_static);
 
         // NoCollision (gravity and velocity, but no collision loop)
-        let cs_no_col = cs_no_coll::load(device.clone())
-            .expect("Failed to load NoCollision compute shader");
+        let cs_no_col =
+            cs_no_coll::load(device.clone()).expect("Failed to load NoCollision compute shader");
         let cp_no_col = ComputePipeline::new(
             device.clone(),
             cs_no_col.entry_point("main").unwrap(),
@@ -143,8 +144,8 @@ impl ComputeShaderRegistry {
         .expect("Failed to create NoCollision pipeline");
         pipelines.insert(ComputeShaderType::NoCollision, cp_no_col);
 
-        let cs_grid = cs_grid_build::load(device.clone())
-            .expect("Failed to load GridBuild compute shader");
+        let cs_grid =
+            cs_grid_build::load(device.clone()).expect("Failed to load GridBuild compute shader");
         let cp_grid = ComputePipeline::new(
             device.clone(),
             cs_grid.entry_point("main").unwrap(),
@@ -155,8 +156,7 @@ impl ComputeShaderRegistry {
         .expect("Failed to create GridBuild pipeline");
         pipelines.insert(ComputeShaderType::GridBuild, cp_grid);
 
-        let cs_empty = cs_empty::load(device.clone())
-            .expect("Failed to load Empty compute shader");
+        let cs_empty = cs_empty::load(device.clone()).expect("Failed to load Empty compute shader");
         let cp_empty = ComputePipeline::new(
             device.clone(),
             cs_empty.entry_point("main").unwrap(),
@@ -167,8 +167,7 @@ impl ComputeShaderRegistry {
         .expect("Failed to create Empty shader pipeline");
         pipelines.insert(ComputeShaderType::Empty, cp_empty);
 
-        let cs_cull = cs_cull::load(device.clone())
-            .expect("Failed to load Cull compute shader");
+        let cs_cull = cs_cull::load(device.clone()).expect("Failed to load Cull compute shader");
         let cp_cull = ComputePipeline::new(
             device.clone(),
             cs_cull.entry_point("main").unwrap(),
@@ -178,7 +177,6 @@ impl ComputeShaderRegistry {
         )
         .expect("Failed to create Cull shader pipeline");
         pipelines.insert(ComputeShaderType::Cull, cp_cull);
-
 
         let cs_test = cs_test::load(device.clone()).expect("Failed to load Test compute shader");
         let cp_test = ComputePipeline::new(
@@ -234,7 +232,7 @@ impl ComputeShaderRegistry {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CullPushConstants {
     pub view_proj: [[f32; 4]; 4],
-    pub batch_offset: u32,         // Index of first instance in the physics buffer
-    pub batch_count: u32,          // How many instances in this batch
-    pub visible_list_offset: u32,  // Where to start writing in the VisibleIndices buffer
+    pub batch_offset: u32, // Index of first instance in the physics buffer
+    pub batch_count: u32,  // How many instances in this batch
+    pub visible_list_offset: u32, // Where to start writing in the VisibleIndices buffer
 }

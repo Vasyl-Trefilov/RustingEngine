@@ -97,40 +97,6 @@ pub fn main() {
         2,
     );
 
-    // engine.add_gltf(Transform {
-    //         position: [0.0, 0.0, 0.0],
-    //         scale: [10.0, 10.0, 10.0],
-    //         ..Default::default()
-    //     },
-    //     &Material::standard()
-    //         .color([0.1, 1.0, 0.1])
-    //         .shader(ShaderType::Pbr)
-    //         .build(),
-    //     &Physics::default()
-    //         .compute_shader(ComputeShaderType::Test)
-    //         .mass(10.0)
-    //         .gravity_scale(1.0)
-    //         .collision_type(CollisionType::Sphere),
-    //     "./testModels/1kRustingSphere.gltf"
-    // );
-
-    // engine.add_gltf(Transform {
-    //         position: [30.0, 0.0, 0.0],
-    //         scale: [10.0, 10.0, 10.0],
-    //         ..Default::default()
-    //     },
-    //     &Material::standard()
-    //         .color([0.1, 1.0, 0.1])
-    //         .shader(ShaderType::Pbr)
-    //         .build(),
-    //     &Physics::default()
-    //         .compute_shader(ComputeShaderType::Test)
-    //         .mass(10.0)
-    //         .gravity_scale(1.0)
-    //         .collision_type(CollisionType::Sphere),
-    //     "./testModels/1kRustingSphere.gltf"
-    // );
-
     engine.set_scene_shader(ShaderType::Pbr);
     engine.set_scene_physic(ComputeShaderType::Test);
     engine.run();

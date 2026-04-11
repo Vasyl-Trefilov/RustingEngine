@@ -1,5 +1,4 @@
 #[allow(dead_code, unused)]
-
 // ! SHAPE AND MESH SYSTEM - Defines geometry and scene organization
 // More I do this, more I understand and respect all developers that created a blender, unity, unreal engine and etc. just F for every man that did something like that and biggest F for that people, who did it opensource. F
 pub mod gltf_loader;
@@ -62,6 +61,7 @@ pub struct Mesh {
     pub vertex_count: u32,                       // Number of vertices
     pub index_count: u32,                        // Number of indices (if using)
     pub base_color_texture: Option<usize>,
+    pub metallic_roughness_texture: Option<usize>,
 }
 
 impl Mesh {
@@ -114,6 +114,7 @@ impl Mesh {
             vertex_count,
             index_count,
             base_color_texture: None,
+            metallic_roughness_texture: None,
         }
     }
 

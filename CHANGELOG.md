@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.42] - 2026-04-11
+
+### Added
+
+- A lot of docs for better user experience( description of functions/values on hover )
+
+### Fixed
+
+- Culling is now working much better, without bugs.
+- Fixing multi gltf model import, now each texture and model render good even if there are 10k gltf models. But each texture is separate, so you cant reuse texture without vram loss, I will fix it so fast as possible.
+
 ## [0.1.41] - 2026-04-6
 
 ### Added

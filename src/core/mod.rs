@@ -1,7 +1,7 @@
+pub mod collisions;
 pub mod material;
 pub mod physics;
 pub mod transform;
-pub mod collisions;
 
 pub use crate::rendering::compute_registry::ComputeShaderType;
 pub use crate::rendering::shader_registry::ShaderType;

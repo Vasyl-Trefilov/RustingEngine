@@ -161,6 +161,19 @@ impl Transform {
     // I am going crazy
 }
 
+// Multiply two transforms (apply rhs then lhs)
+impl std::ops::Mul for Transform {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        // Convert both to matrices, multiply, then convert back
+        let lhs_matrix = nalgebra::Matrix4::from(self.to_matrix());
+        let rhs_matrix = nalgebra::Matrix4::from(rhs.to_matrix());
+        let result_matrix = lhs_matrix * rhs_matrix;
+        Transform::from_matrix(result_matrix)
+    }
+}
+
 pub struct RenderBatch {
     pub mesh: Mesh,
     pub instances: Vec<Instance>,

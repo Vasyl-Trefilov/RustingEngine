@@ -21,7 +21,7 @@ pub fn process_render(
     compute_set: &Arc<PersistentDescriptorSet>,
     total_objects: u32,
     dt: f32,
-    num_big_objects: u32
+    num_big_objects: u32,
 ) {
     if total_objects > 0 {
         let workgroups_x = (total_objects + 255) / 256;
@@ -43,7 +43,7 @@ pub fn process_render(
                     offset: 0,
                     count: total_objects,
                     num_big_objects: num_big_objects,
-                    _pad: [0,0,0],
+                    _pad: [0, 0, 0],
                     global_gravity: [0.0, -9.81, 0.0, 2.0],
                 },
             )
